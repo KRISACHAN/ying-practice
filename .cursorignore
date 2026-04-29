@@ -142,9 +142,6 @@ dist-ssr
 .DS_Store
 
 # project
-
 public/
-services/api-service/app/public/
-services/api-service/.turbo
 
 

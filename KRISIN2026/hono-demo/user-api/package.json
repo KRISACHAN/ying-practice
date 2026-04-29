@@ -1,0 +1,22 @@
+{
+    "name": "user-api",
+    "type": "module",
+    "scripts": {
+        "dev": "wrangler dev",
+        "deploy": "wrangler deploy --minify",
+        "cf-typegen": "wrangler types --env-interface CloudflareBindings",
+        "db:init": "wrangler d1 execute DB --local --file ./sql/init.sql"
+    },
+    "dependencies": {
+        "@hono/zod-validator": "^0.7.6",
+        "crypto": "^1.0.1",
+        "drizzle-orm": "^0.45.2",
+        "hono": "^4.12.15",
+        "zod": "^4.3.6"
+    },
+    "devDependencies": {
+        "@types/node": "^25.6.0",
+        "drizzle-kit": "^0.31.10",
+        "wrangler": "^4.4.0"
+    }
+}

@@ -1,0 +1,18 @@
+{
+    "name": "ai-api-gateway-api",
+    "type": "module",
+    "scripts": {
+        "dev": "wrangler dev",
+        "deploy": "wrangler deploy --minify",
+        "cf-typegen": "wrangler types --env-interface CloudflareBindings",
+        "key:init": "wrangler kv key put --binding=API_KEYS_KV --local \"key:gw-demo-key\" \"{\\\"id\\\":\\\"demo-key-1\\\",\\\"name\\\":\\\"Demo Key\\\",\\\"rateLimit\\\":60,\\\"createdAt\\\":1700000000}\"",
+        "key:check": "wrangler kv key get --binding=API_KEYS_KV --local \"key:gw-demo-key\""
+    },
+    "dependencies": {
+        "@langchain/openai": "^1.4.5",
+        "hono": "^4.12.15"
+    },
+    "devDependencies": {
+        "wrangler": "^4.4.0"
+    }
+}

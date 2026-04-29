@@ -25,3 +25,6 @@ pnpm-debug.log*
 # lock
 yarn.lock
 package-lock.json
+
+# wrangler
+wrangler.jsonc
