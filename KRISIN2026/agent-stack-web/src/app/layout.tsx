@@ -2,9 +2,9 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-    title: 'Agent Stack Lab',
+    title: '小满 · Companion Lab',
     description:
-        'Vercel AI SDK、LangChain、LangGraph 与 LangSmith 的交互式学习示例',
+        'AI 女友对话场景：通过 React Flow 观察 LangChain、LangGraph、LangSmith 的分工与流转',
 };
 
 export default function RootLayout({

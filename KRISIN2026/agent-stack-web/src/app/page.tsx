@@ -1,271 +1,296 @@
 'use client';
-
 import { useState, type FormEvent } from 'react';
-
-type Result = {
-    answer: string;
-    matchedTerms: string[];
-    toolActivity: { name: string; term: string }[];
-    path: string[];
-    tracingEnabled: boolean;
-};
-
-const examples = [
-    'LangChain、LangGraph 和 LangSmith 分别负责什么？',
-    'Vercel AI SDK 和 LangChain 在这个示例中如何配合？',
-    'LangGraph 遇到不相关问题会怎么处理？',
-];
-
-const components = [
-    {
-        number: '01',
-        name: 'Vercel AI SDK',
-        role: '模型与工具',
-        detail: '调用模型，强制先查本地词条，限制工具循环的步数。',
-        className: 'sdk',
-    },
-    {
-        number: '02',
-        name: 'LangChain',
-        role: '提示词链',
-        detail: '用模板组织问题，再将格式化结果交给模型函数。',
-        className: 'chain',
-    },
-    {
-        number: '03',
-        name: 'LangGraph',
-        role: '流程控制',
-        detail: '在 inspect 节点判断问题范围，再走回答或兜底分支。',
-        className: 'graph',
-    },
-    {
-        number: '04',
-        name: 'LangSmith',
-        role: '执行轨迹',
-        detail: '开启追踪后记录整次工作流及模型调用，便于调试。',
-        className: 'smith',
-    },
-];
-
+import { WorkflowCanvas } from '@/components/workflow-canvas';
+import {
+    nodeInfo,
+    type NodeId,
+    type RunEvent,
+    type ChatMessage,
+} from '@/lib/contracts';
 export default function Home() {
-    const [question, setQuestion] = useState(examples[0]);
-    const [result, setResult] = useState<Result | null>(null);
+    const [question, setQuestion] = useState('今天工作好累，想和你聊聊。');
+    const [messages, setMessages] = useState<ChatMessage[]>([]);
+    const [events, setEvents] = useState<RunEvent[]>([]);
+    const [mode, setMode] = useState<'demo' | 'live'>('demo');
+    const [selected, setSelected] = useState<NodeId>('route');
+    const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
-    const [loading, setLoading] = useState(false);
-
-    async function ask(event: FormEvent<HTMLFormElement>) {
+    const [draft, setDraft] = useState('');
+    const [replay, setReplay] = useState<number | null>(null);
+    async function submit(event: FormEvent) {
         event.preventDefault();
-        if (loading) return;
-        setLoading(true);
+        if (busy || !question.trim()) return;
+        const current = question.trim();
+        setBusy(true);
         setError('');
-        setResult(null);
+        setEvents([]);
+        setReplay(null);
+        setDraft('');
+        setQuestion('');
+        let answer = '';
+        let completed = false;
         try {
             const response = await fetch('/api/ask', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ question }),
+                body: JSON.stringify({
+                    question: current,
+                    history: messages.slice(-12),
+                    mode,
+                }),
             });
-            const data: Result | { error: string } = await response.json();
-            if (!response.ok)
-                throw new Error('error' in data ? data.error : '请求失败');
-            setResult(data as Result);
+            if (!response.ok || !response.body)
+                throw new Error('请求无效，请缩短消息后重试。');
+            setMessages(previous => [
+                ...previous,
+                { role: 'user', content: current },
+            ]);
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            const consume = (line: string) => {
+                if (!line.trim()) return;
+                const item = JSON.parse(line) as RunEvent;
+                setEvents(previous => [...previous, item]);
+                if (item.type === 'token') {
+                    answer += item.text;
+                    setDraft(answer);
+                }
+                if (item.type === 'complete') completed = true;
+                if (item.type === 'error') throw new Error(item.message);
+            };
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() ?? '';
+                for (const line of lines) consume(line);
+            }
+            buffer += decoder.decode();
+            consume(buffer);
+            if (!completed) throw new Error('连接中断，请重试。');
+            setMessages(previous => [
+                ...previous,
+                { role: 'assistant', content: answer },
+            ]);
+            setDraft('');
         } catch (cause) {
-            setError(
-                cause instanceof Error
-                    ? cause.message
-                    : '请求失败，请稍后重试。',
-            );
+            setError(cause instanceof Error ? cause.message : '执行失败');
         } finally {
-            setLoading(false);
+            setBusy(false);
         }
     }
-
+    const steps = events.filter(e => e.type === 'node');
+    const visibleEvents = replay === null ? events : steps.slice(0, replay + 1);
+    const details = events.filter(
+        e => e.type === 'node' && e.node === selected,
+    );
+    const completion = events.find(e => e.type === 'complete');
     return (
-        <main className="shell">
-            <header className="topbar">
+        <main className="lab">
+            <header>
                 <div className="brand">
-                    <span className="brand-mark">
-                        a<span>→</span>
-                    </span>
-                    <span>
-                        AGENT STACK <b>LAB</b>
-                    </span>
+                    小满 <span>COMPANION LAB</span>
                 </div>
-                <span className="top-label">
-                    <span className="live-dot" /> INTERACTIVE DEMO · 2026
-                </span>
+                <span className="badge">AI 女友 · 工作流教学</span>
             </header>
-
-            <section className="hero">
-                <div className="eyebrow">
-                    <span className="small-line" /> ANATOMY OF AN AGENT WORKFLOW
+            <section className="intro">
+                <div>
+                    <p className="eyebrow">从一句话，看见一次完整执行</p>
+                    <h1>
+                        她如何理解、组织，<em>再回应你。</em>
+                    </h1>
+                    <p>
+                        左侧聊天，右侧观察真实执行路径。点击节点查看它的职责与本轮记录。
+                    </p>
                 </div>
-                <h1>
-                    一次提问，
-                    <br />
-                    <em>看懂四层能力。</em>
-                </h1>
-                <p>
-                    把模型调用、提示词组合、流程编排和执行追踪放进同一个可观察的网页示例。提出问题，然后看它如何运作。
-                </p>
-                <div className="hero-index">
-                    01 — 04 <span>↓</span>
+                <label className="mode">
+                    运行模式
+                    <select
+                        value={mode}
+                        disabled={busy}
+                        onChange={e =>
+                            setMode(e.target.value as 'demo' | 'live')
+                        }
+                    >
+                        <option value="demo">本地演示 · 无需 API Key</option>
+                        <option value="live">真实模型 · 使用环境变量</option>
+                    </select>
+                </label>
+            </section>
+            <section className="legend">
+                <div>
+                    <b>LangGraph</b>
+                    <span>决定下一步与分支</span>
+                </div>
+                <div>
+                    <b>LangChain</b>
+                    <span>组合角色与会话消息</span>
+                </div>
+                <div>
+                    <b>LangSmith</b>
+                    <span>旁路记录整个执行过程</span>
+                </div>
+                <div>
+                    <b>Vercel AI SDK</b>
+                    <span>调用模型并流式回复</span>
                 </div>
             </section>
-
-            <section
-                className="architecture"
-                aria-labelledby="architecture-title"
-            >
-                <div className="section-heading">
-                    <div>
-                        <span className="section-kicker">
-                            THE STACK / 技术分工
-                        </span>
-                        <h2 id="architecture-title">每一层都有明确职责</h2>
-                    </div>
-                    <span className="section-note">
-                        4 COMPONENTS
-                        <br />1 WORKFLOW
-                    </span>
-                </div>
-                <div className="cards">
-                    {components.map(item => (
-                        <article
-                            className={`component-card ${item.className}`}
-                            key={item.name}
-                        >
-                            <div className="card-top">
-                                <span>{item.number} / 04</span>
-                                <span className="card-symbol">↗</span>
-                            </div>
-                            <div>
-                                <span className="role">{item.role}</span>
-                                <h3>{item.name}</h3>
-                                <p>{item.detail}</p>
-                            </div>
-                        </article>
-                    ))}
-                </div>
-            </section>
-
-            <section className="workspace" aria-labelledby="workspace-title">
-                <div className="section-heading">
-                    <div>
-                        <span className="section-kicker">
-                            TRY IT / 交互实验
-                        </span>
-                        <h2 id="workspace-title">输入一个问题</h2>
-                    </div>
-                    <span className="section-note">
-                        LIVE WORKFLOW
-                        <br />↘
-                    </span>
-                </div>
-                <div className="work-grid">
-                    <form className="query-panel" onSubmit={ask}>
-                        <label htmlFor="question">
-                            YOUR QUESTION <span>001</span>
-                        </label>
-                        <textarea
-                            id="question"
-                            value={question}
-                            onChange={event => setQuestion(event.target.value)}
-                            minLength={2}
-                            maxLength={500}
-                            rows={5}
-                            required
-                            placeholder="问问这些工具如何协作…"
-                        />
-                        <div className="suggestions">
-                            <span>试试这些问题</span>
-                            {examples.map(example => (
-                                <button
-                                    key={example}
-                                    type="button"
-                                    onClick={() => setQuestion(example)}
-                                >
-                                    {example} <span>↗</span>
-                                </button>
-                            ))}
+            <div className="workspace">
+                <section className="chat panel">
+                    <div className="panel-head">
+                        <div>
+                            <b>小满</b>
+                            <small>虚构成年 AI 伴侣角色</small>
                         </div>
-                        <button
-                            className="submit"
-                            type="submit"
-                            disabled={loading}
-                        >
-                            {loading ? '正在运行…' : '运行工作流'}
-                            <span>↗</span>
-                        </button>
-                    </form>
-
-                    <div className="output-panel" aria-live="polite">
-                        <div className="output-head">
-                            <span>EXECUTION / 执行结果</span>
-                            <span
-                                className={`status ${result ? 'completed' : ''}`}
-                            >
-                                {loading
-                                    ? '● RUNNING'
-                                    : result
-                                      ? '● COMPLETE'
-                                      : '○ READY'}
-                            </span>
+                        <span className="dot">
+                            {mode === 'demo' ? '模拟回复' : '真实模型'}
+                        </span>
+                    </div>
+                    <div className="conversation" aria-live="polite">
+                        <div className="bubble assistant">
+                            今天过得怎么样？想聊点轻松的，还是想说说心事？
                         </div>
-                        {error ? (
-                            <div className="error-box" role="alert">
-                                {error}
+                        {messages.map((m, i) => (
+                            <div key={i} className={`bubble ${m.role}`}>
+                                {m.content}
                             </div>
-                        ) : result ? (
-                            <div className="output-body">
-                                <div className="output-label">最终回答</div>
-                                <p className="answer">{result.answer}</p>
-                                <div className="output-meta">
-                                    <div>
-                                        <span>GRAPH PATH</span>
-                                        <strong>
-                                            {result.path.join(' → ')}
-                                        </strong>
-                                    </div>
-                                    <div>
-                                        <span>TOOL CALLS</span>
-                                        <strong>
-                                            {result.toolActivity.length
-                                                ? result.toolActivity
-                                                      .map(
-                                                          call =>
-                                                              `${call.name}(${call.term})`,
-                                                      )
-                                                      .join(' · ')
-                                                : '未调用模型工具'}
-                                        </strong>
-                                    </div>
-                                    <div>
-                                        <span>LANGSMITH</span>
-                                        <strong>
-                                            {result.tracingEnabled
-                                                ? '已开启服务端追踪'
-                                                : '未开启云端追踪'}
-                                        </strong>
-                                    </div>
-                                </div>
-                            </div>
-                        ) : (
-                            <div className="empty-state">
-                                <div className="empty-icon">↗</div>
-                                <p>准备就绪。</p>
-                                <span>
-                                    提交问题后，这里会显示回答、节点路径与工具调用记录。
-                                </span>
-                            </div>
+                        ))}
+                        {draft && (
+                            <div className="bubble assistant">{draft}</div>
+                        )}
+                        {busy && !draft && (
+                            <div className="thinking">正在组织回应…</div>
                         )}
                     </div>
-                </div>
-            </section>
+                    {error && (
+                        <p className="error" role="alert">
+                            {error}
+                        </p>
+                    )}
+                    <div className="examples">
+                        <button
+                            disabled={busy}
+                            onClick={() =>
+                                setQuestion('今天工作好累，想和你聊聊。')
+                            }
+                        >
+                            情绪陪伴分支
+                        </button>
+                        <button
+                            disabled={busy}
+                            onClick={() =>
+                                setQuestion('周末想去喝咖啡，陪我想想安排吧。')
+                            }
+                        >
+                            日常聊天分支
+                        </button>
+                    </div>
+                    <form onSubmit={submit}>
+                        <textarea
+                            aria-label="对小满说的话"
+                            maxLength={1000}
+                            value={question}
+                            onChange={e => setQuestion(e.target.value)}
+                            placeholder="对小满说点什么…"
+                        />
+                        <button
+                            className="send"
+                            disabled={busy || !question.trim()}
+                        >
+                            {busy ? '执行中…' : '发送并观察 →'}
+                        </button>
+                    </form>
+                    <p className="hint">
+                        {mode === 'demo'
+                            ? '演示模式执行真实图与提示词模板，仅模型回复为本地固定示例。'
+                            : '真实模式调用服务端配置的模型。历史仅保存在当前页面，刷新后清空。'}
+                    </p>
+                </section>
+                <section className="graph panel">
+                    <div className="panel-head">
+                        <div>
+                            <b>执行流程</b>
+                            <small>LANGGRAPH / 实际节点事件</small>
+                        </div>
+                        <span className="badge">可缩放 · 点击节点</span>
+                    </div>
+                    <WorkflowCanvas
+                        events={visibleEvents}
+                        onSelect={setSelected}
+                    />
+                    {steps.length > 0 && !busy && (
+                        <div className="replay">
+                            <label>
+                                逐步回看 ·{' '}
+                                {replay === null
+                                    ? '完整执行'
+                                    : `${replay + 1} / ${steps.length}`}
+                                <input
+                                    aria-label="回看执行步骤"
+                                    type="range"
+                                    min={0}
+                                    max={steps.length - 1}
+                                    value={replay ?? steps.length - 1}
+                                    onChange={e => {
+                                        const index = Number(e.target.value);
+                                        setReplay(index);
+                                        const step = steps[index];
+                                        if (step?.type === 'node')
+                                            setSelected(step.node);
+                                    }}
+                                />
+                            </label>
+                            <button onClick={() => setReplay(null)}>
+                                显示完整路径
+                            </button>
+                        </div>
+                    )}
+                    <div className="trace-strip">
+                        <b>LangSmith · 旁路追踪</b>
+                        <span>
+                            {completion?.type === 'complete' &&
+                            completion.tracing
+                                ? '已启用轨迹发送，请到 LangSmith 项目查看'
+                                : '当前未启用云端追踪；下方是本地执行记录'}
+                        </span>
+                    </div>
+                </section>
+                <aside className="inspector panel">
+                    <p className="eyebrow">NODE INSPECTOR</p>
+                    <h2>{nodeInfo[selected].title}</h2>
+                    <span className="badge">{nodeInfo[selected].owner}</span>
+                    <p>{nodeInfo[selected].explanation}</p>
+                    <h3>本轮节点记录</h3>
+                    {details.length ? (
+                        details.map(
+                            (e, i) =>
+                                e.type === 'node' && (
+                                    <div className="event" key={i}>
+                                        <b>{e.status}</b>
+                                        <small>
+                                            {new Date(
+                                                e.at,
+                                            ).toLocaleTimeString()}
+                                        </small>
+                                        <p>{e.detail}</p>
+                                    </div>
+                                ),
+                        )
+                    ) : (
+                        <p className="muted">
+                            该节点尚未执行。分支中未被选择的节点会保持等待状态。
+                        </p>
+                    )}
+                    <h3>为什么 LangSmith 不在连线上？</h3>
+                    <p className="muted">
+                        它观察运行轨迹，不决定业务流向。启用环境变量后，服务端追踪根任务与模型调用。
+                    </p>
+                </aside>
+            </div>
             <footer>
-                <span>AGENT STACK LAB</span>
-                <span>Vercel AI SDK · LangChain · LangGraph · LangSmith</span>
-                <span>BUILT FOR LEARNING ↗</span>
+                教学范围：条件分支、会话上下文、提示词组合、流式生成、执行追踪。当前未实现长期记忆或跨设备会话。
             </footer>
         </main>
     );

@@ -12,6 +12,7 @@
     "@ai-sdk/openai": "^4.0.78",
     "@langchain/core": "^1.0.0",
     "@langchain/langgraph": "^1.0.0",
+    "@xyflow/react": "^12.12.0",
     "ai": "^7.0.118",
     "langsmith": "^0.10.5",
     "next": "^16.0.0",
