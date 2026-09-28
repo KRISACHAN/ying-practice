@@ -2,6 +2,8 @@
 
 用虚构成年 AI 伴侣「小满」的聊天场景，展示 **LangChain、LangGraph、LangSmith + Vercel AI SDK** 的分工。React Flow 图示接收后端真实执行事件，可以点击节点、缩放、回看执行步骤。
 
+深入理解三者的用法、区别与实践建议，请阅读 [LangChain / LangGraph / LangSmith 指南](./LANGCHAIN_LANGGRAPH_LANGSMITH_GUIDE.md)。
+
 ## 运行
 
 需要 Node.js 20.9+、pnpm。在本目录运行：
