@@ -1,10 +1,12 @@
 'use client';
+import { useEffect, useRef, useState } from 'react';
 import {
     Background,
     Controls,
     Handle,
     Position,
     ReactFlow,
+    type ReactFlowInstance,
     type NodeProps,
     type Node,
 } from '@xyflow/react';
@@ -58,6 +60,24 @@ export function WorkflowCanvas({
     events: RunEvent[];
     onSelect: (id: NodeId) => void;
 }) {
+    const container = useRef<HTMLDivElement>(null);
+    const [flow, setFlow] = useState<ReactFlowInstance<StepNode> | null>(null);
+    // 容器尺寸变化时重新适配图，避免手机横竖屏切换后节点被裁切。
+    useEffect(() => {
+        if (!container.current || !flow) return;
+        let frame = 0;
+        const observer = new ResizeObserver(() => {
+            cancelAnimationFrame(frame);
+            frame = requestAnimationFrame(() => {
+                void flow.fitView({ padding: 0.15 });
+            });
+        });
+        observer.observe(container.current);
+        return () => {
+            observer.disconnect();
+            cancelAnimationFrame(frame);
+        };
+    }, [flow]);
     const status = (id: NodeId) => {
         const event = events
             .filter(e => e.type === 'node' && e.node === id)
@@ -84,11 +104,12 @@ export function WorkflowCanvas({
         },
     }));
     return (
-        <div className="canvas">
+        <div className="canvas" ref={container}>
             <ReactFlow
                 nodes={nodes}
                 edges={edges}
                 nodeTypes={nodeTypes}
+                onInit={setFlow}
                 fitView
                 nodesDraggable={false}
                 nodesConnectable={false}
