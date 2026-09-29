@@ -28,3 +28,6 @@ package-lock.json
 
 # wrangler
 wrangler.jsonc
+
+# npm
+.pnpm-store/

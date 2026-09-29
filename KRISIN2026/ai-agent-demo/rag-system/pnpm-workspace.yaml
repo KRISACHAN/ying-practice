@@ -1,0 +1,6 @@
+packages:
+  - .
+allowBuilds:
+  esbuild: true
+overrides:
+  use-sync-external-store: 1.7.0
