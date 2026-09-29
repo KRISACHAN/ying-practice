@@ -11,7 +11,9 @@ export const rateLimitMiddleware = createMiddleware<AppEnv>(
         // 当前分钟的时间窗口 key
         const windowKey = `rate:${apiKeyId}:${Math.floor(Date.now() / 60000)}`;
 
-        const count = parseInt((await c.env.RATE_LIMIT_KV.get(windowKey)) || '0');
+        const count = parseInt(
+            (await c.env.RATE_LIMIT_KV.get(windowKey)) || '0',
+        );
 
         if (count >= limit) {
             throw new HTTPException(429, {

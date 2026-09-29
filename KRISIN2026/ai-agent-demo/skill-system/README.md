@@ -43,17 +43,17 @@ npm test
   → 组装 system / user 消息，交给模型生成回复
 ```
 
-| 位置 | 职责 |
-| --- | --- |
+| 位置                          | 职责                                                                                               |
+| ----------------------------- | -------------------------------------------------------------------------------------------------- |
 | `src/skills.js` 的 `registry` | Manifest 说明 ID、版本、名称与优先级；定义包含匹配规则和过程指令。启动时检查 ID 重复和定义完整性。 |
-| `selectSkill` | 显式命令优先；自动触发时按命中数、优先级、ID 稳定排序；只返回第一名。未知命令不执行。 |
-| `runPromptSkill` | 执行 Prompt Skill：把选中的定义转成这轮可用的系统指令，不执行工具。 |
-| `buildMessages` | 把通用要求、Skill 过程指令和用户原文组装成模型消息。 |
-| `src/app.js` | Hono 路由：提供网页、Skill 列表、预览 API 和流式执行 API。 |
-| `src/model-stream.js` | 读取模型服务的 Chat Completions SSE，解析文本增量。 |
-| `src/server.js` | 用 `@hono/node-server` 将 Hono 应用监听在本机。 |
-| `web/` | 输入、示例、执行结果、Prompt 展示界面。 |
-| `src/demo.js` | 命令行对照入口。 |
+| `selectSkill`                 | 显式命令优先；自动触发时按命中数、优先级、ID 稳定排序；只返回第一名。未知命令不执行。              |
+| `runPromptSkill`              | 执行 Prompt Skill：把选中的定义转成这轮可用的系统指令，不执行工具。                                |
+| `buildMessages`               | 把通用要求、Skill 过程指令和用户原文组装成模型消息。                                               |
+| `src/app.js`                  | Hono 路由：提供网页、Skill 列表、预览 API 和流式执行 API。                                         |
+| `src/model-stream.js`         | 读取模型服务的 Chat Completions SSE，解析文本增量。                                                |
+| `src/server.js`               | 用 `@hono/node-server` 将 Hono 应用监听在本机。                                                    |
+| `web/`                        | 输入、示例、执行结果、Prompt 展示界面。                                                            |
+| `src/demo.js`                 | 命令行对照入口。                                                                                   |
 
 例如输入“两个工作机会让我很纠结”，规则会选中 `decision-clarifier`；模型看到的系统消息会多一段“先明确选项、硬约束和取舍”的指令。普通闲聊选不中 Skill，就只使用通用系统消息。
 

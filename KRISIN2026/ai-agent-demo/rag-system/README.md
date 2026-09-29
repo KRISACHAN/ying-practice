@@ -16,10 +16,10 @@
 
 ### 两种运行模式
 
-| 模式 | PostgreSQL、切块、LangGraph | 向量与回答 |
-|---|---|---|
-| `RAG_MODE=demo` | 真实执行 | 本地特征哈希向量 + 原文句子摘录；不调用模型 |
-| `RAG_MODE=live` | 真实执行 | AI SDK 调用配置的 Embedding 与生成模型 |
+| 模式            | PostgreSQL、切块、LangGraph | 向量与回答                                  |
+| --------------- | --------------------------- | ------------------------------------------- |
+| `RAG_MODE=demo` | 真实执行                    | 本地特征哈希向量 + 原文句子摘录；不调用模型 |
+| `RAG_MODE=live` | 真实执行                    | AI SDK 调用配置的 Embedding 与生成模型      |
 
 demo 用于理解数据流、版本和失败处理。它不具备真实语义模型的同义词能力，摘录也不是 LLM 的推理结果。真实模型调用失败会明确报失败，不会自动换成模拟输出。
 
@@ -94,15 +94,15 @@ EMBEDDING_DIMENSIONS=1536
 
 Embedding 可走独立兼容服务，设置 `EMBEDDING_API_KEY` 与 `EMBEDDING_BASE_URL`；未设置时复用 `OPENAI_*`。服务需要支持 `/embeddings` 和对应模型；生成侧使用 OpenAI 兼容 **Chat Completions**，并要求支持 JSON Schema 结构化输出。仅提供聊天 API 的服务不能替代 Embedding 服务。
 
-| 配置 | 用途 |
-|---|---|
-| `DATABASE_URL` | 数据库连接，仅服务端可见 |
-| `RAG_TENANT_ID` | 本地演示固定检索范围，浏览器不能覆盖 |
-| `CHUNK_SIZE` / `CHUNK_OVERLAP` | 切分字符数与重叠量，不是 Token 数 |
-| `RECALL_K` | 每路初步召回数量 |
-| `CONTEXT_K` / `CONTEXT_CHAR_BUDGET` | 最终来源数量与正文字符预算 |
-| `MIN_VECTOR_SCORE` / `MIN_KEYWORD_SCORE` | 演示证据门禁阈值，需要针对自己的问题集校准 |
-| `LANGSMITH_TRACING` | 默认关闭；开启后 LangGraph/LangChain 可向远程记录图轨迹 |
+| 配置                                     | 用途                                                    |
+| ---------------------------------------- | ------------------------------------------------------- |
+| `DATABASE_URL`                           | 数据库连接，仅服务端可见                                |
+| `RAG_TENANT_ID`                          | 本地演示固定检索范围，浏览器不能覆盖                    |
+| `CHUNK_SIZE` / `CHUNK_OVERLAP`           | 切分字符数与重叠量，不是 Token 数                       |
+| `RECALL_K`                               | 每路初步召回数量                                        |
+| `CONTEXT_K` / `CONTEXT_CHAR_BUDGET`      | 最终来源数量与正文字符预算                              |
+| `MIN_VECTOR_SCORE` / `MIN_KEYWORD_SCORE` | 演示证据门禁阈值，需要针对自己的问题集校准              |
+| `LANGSMITH_TRACING`                      | 默认关闭；开启后 LangGraph/LangChain 可向远程记录图轨迹 |
 
 ### 模型变更为什么需要重新索引
 
@@ -254,16 +254,16 @@ demo 用两个经配置的阈值与上下文预算做基础门禁，live 还允�
 
 ### 分层指标
 
-| 层次 | 指标 | 说明 |
-|---|---|---|
-| 召回 | Recall@K | 全部标注相关资料中进入前 K 的比例 |
-| 候选 | Precision@K | 前 K 中真正相关的比例 |
-| 单核心来源 | Hit Rate@K | 至少一次命中核心来源的问题比例 |
-| 排序 | MRR@K | 前 K 中首个相关来源的倒数排名均值；未命中为 0 |
-| 生成 | Correctness / Groundedness | 事实正确及是否受到证据支持 |
-| 引用 | Citation Accuracy | 引用是否真正支持对应说法 |
-| 无答案 | Abstention Accuracy | 应拒答时是否正确拒答 |
-| 运行 | P50/P95、Token、成功回答成本 | 质量之外的性能与预算 |
+| 层次       | 指标                         | 说明                                          |
+| ---------- | ---------------------------- | --------------------------------------------- |
+| 召回       | Recall@K                     | 全部标注相关资料中进入前 K 的比例             |
+| 候选       | Precision@K                  | 前 K 中真正相关的比例                         |
+| 单核心来源 | Hit Rate@K                   | 至少一次命中核心来源的问题比例                |
+| 排序       | MRR@K                        | 前 K 中首个相关来源的倒数排名均值；未命中为 0 |
+| 生成       | Correctness / Groundedness   | 事实正确及是否受到证据支持                    |
+| 引用       | Citation Accuracy            | 引用是否真正支持对应说法                      |
+| 无答案     | Abstention Accuracy          | 应拒答时是否正确拒答                          |
+| 运行       | P50/P95、Token、成功回答成本 | 质量之外的性能与预算                          |
 
 固定问题集应覆盖中文口语、同义表达、错别字、精确词、多轮指代、数量与否定约束、版本、权限和无答案。平均分之外还应按标签分组，保留逐题结果。线上失败经人工确认后回流数据集，避免把用户没点踩当成正确。
 
@@ -286,32 +286,32 @@ demo 用两个经配置的阈值与上下文预算做基础门禁，live 还允�
 
 ## 7. 代码索引与 API
 
-| 文件 | 职责 |
-|---|---|
-| `src/config.ts` | env 校验、模型 profile、策略版本 |
-| `src/schema.sql` | 来源、向量、索引任务与索引定义 |
-| `src/store.ts` | 文档切块、事务发布、删除、范围内检索与版本复核 |
-| `src/retrieval.ts` | 中文二元组、演示向量、RRF、门禁、引用校验 |
-| `src/models.ts` | AI SDK 模型适配与 LangChain 提示词 |
-| `src/workflow.ts` | LangGraph 节点、条件边、失败状态与本地轨迹 |
-| `src/fixtures.ts` / `src/evaluation.ts` | 合成资料与固定检索评测 |
-| `src/app.ts` / `src/server.ts` | Hono API、静态页面与本机服务 |
-| `src/local-db.ts` | 可选的原生本地 PostgreSQL 启停 |
-| `web/` | 问答、知识库编辑与评测界面 |
-| `web/react/flow.tsx` / `flow.css` | React Flow 执行图、节点详情与回看 |
-| `web/events.js` | SSE 跨块解析与事件到图状态的投影 |
-| `scripts-build.mjs` | 本地打包 React 与 React Flow |
+| 文件                                    | 职责                                           |
+| --------------------------------------- | ---------------------------------------------- |
+| `src/config.ts`                         | env 校验、模型 profile、策略版本               |
+| `src/schema.sql`                        | 来源、向量、索引任务与索引定义                 |
+| `src/store.ts`                          | 文档切块、事务发布、删除、范围内检索与版本复核 |
+| `src/retrieval.ts`                      | 中文二元组、演示向量、RRF、门禁、引用校验      |
+| `src/models.ts`                         | AI SDK 模型适配与 LangChain 提示词             |
+| `src/workflow.ts`                       | LangGraph 节点、条件边、失败状态与本地轨迹     |
+| `src/fixtures.ts` / `src/evaluation.ts` | 合成资料与固定检索评测                         |
+| `src/app.ts` / `src/server.ts`          | Hono API、静态页面与本机服务                   |
+| `src/local-db.ts`                       | 可选的原生本地 PostgreSQL 启停                 |
+| `web/`                                  | 问答、知识库编辑与评测界面                     |
+| `web/react/flow.tsx` / `flow.css`       | React Flow 执行图、节点详情与回看              |
+| `web/events.js`                         | SSE 跨块解析与事件到图状态的投影               |
+| `scripts-build.mjs`                     | 本地打包 React 与 React Flow                   |
 
-| 方法与路径 | 用途 |
-|---|---|
-| `GET /api/status` | 就绪状态与不含密钥的公开配置 |
-| `GET /api/documents` | 当前文档与最近索引任务 |
-| `POST /api/documents` | `{id,title,body}` 写入及重建 |
-| `DELETE /api/documents/:id` | 删除当前服务端范围内的来源 |
-| `POST /api/seed` | 导入或恢复示例 |
-| `POST /api/query` | `{question,history?,retrieval?}` 检索和回答 |
-| `POST /api/query/stream` | 同样输入，实时节点事件与已验证的最终结果 |
-| `POST /api/eval` | 运行固定问题集 |
+| 方法与路径                  | 用途                                        |
+| --------------------------- | ------------------------------------------- |
+| `GET /api/status`           | 就绪状态与不含密钥的公开配置                |
+| `GET /api/documents`        | 当前文档与最近索引任务                      |
+| `POST /api/documents`       | `{id,title,body}` 写入及重建                |
+| `DELETE /api/documents/:id` | 删除当前服务端范围内的来源                  |
+| `POST /api/seed`            | 导入或恢复示例                              |
+| `POST /api/query`           | `{question,history?,retrieval?}` 检索和回答 |
+| `POST /api/query/stream`    | 同样输入，实时节点事件与已验证的最终结果    |
+| `POST /api/eval`            | 运行固定问题集                              |
 
 写请求使用 `Content-Type: application/json`，单次请求体不超过 80KB。示例 HTTP 调用：
 

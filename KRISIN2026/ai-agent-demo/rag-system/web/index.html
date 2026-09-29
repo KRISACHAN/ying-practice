@@ -1,46 +1,233 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
-  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="color-scheme" content="light"><title>RAG Lab · 让回答有据可查</title>
-  <link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/flow.css"><script type="module" src="/app.js"></script>
-</head>
-<body>
-  <header><a class="brand" href="/">R<span>↗</span> <b>RAG LAB</b></a><span class="header-note">检索增强生成 · 可观察实验室</span><span id="mode" class="badge">正在连接</span></header>
-  <main>
-    <section class="hero"><div class="eyebrow">FROM QUESTION TO EVIDENCE</div><h1>让回答<span>有据可查。</span></h1><p>把知识切成片段，找到相关证据，再回答。<br>亲手观察一次 RAG 从问题到引用的完整过程。</p><div class="stack">Hono <i>＋</i> PostgreSQL / pgvector <i>＋</i> LangChain <i>＋</i> LangGraph <i>＋</i> AI SDK</div></section>
-    <div id="notice" class="notice" role="status" aria-live="polite">正在连接本地服务…</div>
-    <nav class="tabs" aria-label="实验页面"><button class="active" data-tab="ask">01 问答实验</button><button data-tab="knowledge">02 知识库</button><button data-tab="evaluation">03 评测</button></nav>
-    <section id="ask" class="tab-panel">
-      <div id="flow-root"></div>
-      <div class="workspace">
-        <aside class="query-panel"><div class="eyebrow">YOUR QUESTION</div><h2>从一个问题开始</h2>
-          <form id="query-form"><label for="question">想从知识库中了解什么？</label><textarea id="question" maxlength="1000" required minlength="2" rows="5" placeholder="例如：RRF 为什么按排名融合？"></textarea>
-          <div class="form-row"><label for="retrieval">检索方式</label><select id="retrieval"><option value="hybrid">混合检索 · RRF</option><option value="vector">仅向量检索</option><option value="keyword">仅关键词检索</option></select></div>
-          <label class="check"><input id="use-history" type="checkbox">将本页最近对话用于多轮追问</label>
-          <div class="actions"><button id="ask-button" class="primary" type="submit">检索并回答 ↗</button><button id="cancel" type="button" hidden>取消</button></div></form>
-          <h3 class="small-title">试试这些问题</h3><div id="samples" class="samples"></div><button id="clear-history" class="text-button" type="button">清空本页对话</button>
-          <div class="aside-note"><b>观察重点</b><p>正确资料是否被召回？<br>引用是否来自当前版本？<br>没有答案时是否正常结束？</p></div>
-        </aside>
-        <div class="result-panel"><div class="panel-heading"><h2>回答与证据</h2><span id="result-state" class="badge neutral">等待提问</span></div>
-          <p id="answer" class="answer">导入示例知识后，提出一个问题。你会看到答案、来源片段和每个节点的执行耗时。</p>
-          <div id="run-meta" class="run-meta"></div><div id="sources" class="sources"></div>
-          <section class="trace-section"><h3>执行路径 <span>LangGraph</span></h3><ol id="trace" class="trace"></ol></section>
-          <details id="candidate-details"><summary>查看召回候选与两路排名</summary><div class="table-wrap"><table><thead><tr><th>来源</th><th>向量相似度</th><th>关键词覆盖</th><th>两路排名</th><th>RRF</th></tr></thead><tbody id="candidates"></tbody></table></div></details>
-        </div>
-      </div>
-    </section>
-    <section id="knowledge" class="tab-panel" hidden>
-      <div class="section-heading"><div><div class="eyebrow">KNOWLEDGE BASE</div><h2>知识从这里进入</h2><p>示例资料均为自行编写的合成技术知识。相同 ID 保存为新版本，旧片段随事务清理。</p></div><button id="seed" class="primary">导入 / 恢复 8 份示例</button></div>
-      <div class="knowledge-grid"><div><div id="documents" class="documents"></div><h3>最近索引任务</h3><div id="jobs" class="jobs"></div></div>
-        <form id="document-form" class="editor"><h3 id="editor-title">新增文档</h3><label for="doc-id">稳定 ID（英文、数字、短横线）</label><input id="doc-id" required pattern="[a-z0-9][a-z0-9-]{0,63}" maxlength="64" placeholder="my-rag-note"><label for="doc-title">标题</label><input id="doc-title" required maxlength="100" placeholder="一条可核对的知识"><label for="doc-body">Markdown / 纯文本正文</label><textarea id="doc-body" required minlength="10" maxlength="20000" rows="14" placeholder="保留标题、规则、条件与结论…"></textarea><div class="actions"><button class="primary" type="submit">保存并建立索引</button><button id="new-document" type="button">新建</button></div><p class="muted">专用索引请求会等待向量完成；查询不会重新索引文档。模型失败时旧版本继续可读。</p></form>
-      </div>
-    </section>
-    <section id="evaluation" class="tab-panel" hidden>
-      <div class="section-heading"><div><div class="eyebrow">MEASURE, THEN IMPROVE</div><h2>用问题集判断检索质量</h2><p>9 道固定问题，覆盖概念、版本、精确标识和无答案。这里只评测检索与证据门禁。</p></div><button id="evaluate" class="primary">运行检索评测 ↗</button></div>
-      <div id="eval-summary" class="eval-summary"></div><div class="table-wrap"><table><thead><tr><th>问题</th><th>期望来源</th><th>Top-5 命中</th><th>RR@5</th><th>门禁</th></tr></thead><tbody id="eval-rows"></tbody></table></div><p class="muted">合成样例用于回归教学流程，不代表真实中文语义检索能力；生成质量需要另做人工标注与忠实度评测。</p>
-    </section>
-    <footer><span>少量、相关、有效、权限正确的证据。</span><span id="configuration">本地教学环境</span></footer>
-  </main>
-</body>
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width,initial-scale=1" />
+        <meta name="color-scheme" content="light" />
+        <title>RAG Lab · 让回答有据可查</title>
+        <link rel="stylesheet" href="/style.css" />
+        <link rel="stylesheet" href="/flow.css" />
+        <script type="module" src="/app.js"></script>
+    </head>
+    <body>
+        <header>
+            <a class="brand" href="/">R<span>↗</span> <b>RAG LAB</b></a
+            ><span class="header-note">检索增强生成 · 可观察实验室</span
+            ><span id="mode" class="badge">正在连接</span>
+        </header>
+        <main>
+            <section class="hero">
+                <div class="eyebrow">FROM QUESTION TO EVIDENCE</div>
+                <h1>让回答<span>有据可查。</span></h1>
+                <p>
+                    把知识切成片段，找到相关证据，再回答。<br />亲手观察一次 RAG
+                    从问题到引用的完整过程。
+                </p>
+                <div class="stack">
+                    Hono <i>＋</i> PostgreSQL / pgvector <i>＋</i> LangChain
+                    <i>＋</i> LangGraph <i>＋</i> AI SDK
+                </div>
+            </section>
+            <div id="notice" class="notice" role="status" aria-live="polite">
+                正在连接本地服务…
+            </div>
+            <nav class="tabs" aria-label="实验页面">
+                <button class="active" data-tab="ask">01 问答实验</button
+                ><button data-tab="knowledge">02 知识库</button
+                ><button data-tab="evaluation">03 评测</button>
+            </nav>
+            <section id="ask" class="tab-panel">
+                <div id="flow-root"></div>
+                <div class="workspace">
+                    <aside class="query-panel">
+                        <div class="eyebrow">YOUR QUESTION</div>
+                        <h2>从一个问题开始</h2>
+                        <form id="query-form">
+                            <label for="question">想从知识库中了解什么？</label
+                            ><textarea
+                                id="question"
+                                maxlength="1000"
+                                required
+                                minlength="2"
+                                rows="5"
+                                placeholder="例如：RRF 为什么按排名融合？"
+                            ></textarea>
+                            <div class="form-row">
+                                <label for="retrieval">检索方式</label
+                                ><select id="retrieval">
+                                    <option value="hybrid">
+                                        混合检索 · RRF
+                                    </option>
+                                    <option value="vector">仅向量检索</option>
+                                    <option value="keyword">
+                                        仅关键词检索
+                                    </option>
+                                </select>
+                            </div>
+                            <label class="check"
+                                ><input
+                                    id="use-history"
+                                    type="checkbox"
+                                />将本页最近对话用于多轮追问</label
+                            >
+                            <div class="actions">
+                                <button
+                                    id="ask-button"
+                                    class="primary"
+                                    type="submit"
+                                >
+                                    检索并回答 ↗</button
+                                ><button id="cancel" type="button" hidden>
+                                    取消
+                                </button>
+                            </div>
+                        </form>
+                        <h3 class="small-title">试试这些问题</h3>
+                        <div id="samples" class="samples"></div>
+                        <button
+                            id="clear-history"
+                            class="text-button"
+                            type="button"
+                        >
+                            清空本页对话
+                        </button>
+                        <div class="aside-note">
+                            <b>观察重点</b>
+                            <p>
+                                正确资料是否被召回？<br />引用是否来自当前版本？<br />没有答案时是否正常结束？
+                            </p>
+                        </div>
+                    </aside>
+                    <div class="result-panel">
+                        <div class="panel-heading">
+                            <h2>回答与证据</h2>
+                            <span id="result-state" class="badge neutral"
+                                >等待提问</span
+                            >
+                        </div>
+                        <p id="answer" class="answer">
+                            导入示例知识后，提出一个问题。你会看到答案、来源片段和每个节点的执行耗时。
+                        </p>
+                        <div id="run-meta" class="run-meta"></div>
+                        <div id="sources" class="sources"></div>
+                        <section class="trace-section">
+                            <h3>执行路径 <span>LangGraph</span></h3>
+                            <ol id="trace" class="trace"></ol>
+                        </section>
+                        <details id="candidate-details">
+                            <summary>查看召回候选与两路排名</summary>
+                            <div class="table-wrap">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>来源</th>
+                                            <th>向量相似度</th>
+                                            <th>关键词覆盖</th>
+                                            <th>两路排名</th>
+                                            <th>RRF</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="candidates"></tbody>
+                                </table>
+                            </div>
+                        </details>
+                    </div>
+                </div>
+            </section>
+            <section id="knowledge" class="tab-panel" hidden>
+                <div class="section-heading">
+                    <div>
+                        <div class="eyebrow">KNOWLEDGE BASE</div>
+                        <h2>知识从这里进入</h2>
+                        <p>
+                            示例资料均为自行编写的合成技术知识。相同 ID
+                            保存为新版本，旧片段随事务清理。
+                        </p>
+                    </div>
+                    <button id="seed" class="primary">
+                        导入 / 恢复 8 份示例
+                    </button>
+                </div>
+                <div class="knowledge-grid">
+                    <div>
+                        <div id="documents" class="documents"></div>
+                        <h3>最近索引任务</h3>
+                        <div id="jobs" class="jobs"></div>
+                    </div>
+                    <form id="document-form" class="editor">
+                        <h3 id="editor-title">新增文档</h3>
+                        <label for="doc-id">稳定 ID（英文、数字、短横线）</label
+                        ><input
+                            id="doc-id"
+                            required
+                            pattern="[a-z0-9][a-z0-9-]{0,63}"
+                            maxlength="64"
+                            placeholder="my-rag-note"
+                        /><label for="doc-title">标题</label
+                        ><input
+                            id="doc-title"
+                            required
+                            maxlength="100"
+                            placeholder="一条可核对的知识"
+                        /><label for="doc-body">Markdown / 纯文本正文</label
+                        ><textarea
+                            id="doc-body"
+                            required
+                            minlength="10"
+                            maxlength="20000"
+                            rows="14"
+                            placeholder="保留标题、规则、条件与结论…"
+                        ></textarea>
+                        <div class="actions">
+                            <button class="primary" type="submit">
+                                保存并建立索引</button
+                            ><button id="new-document" type="button">
+                                新建
+                            </button>
+                        </div>
+                        <p class="muted">
+                            专用索引请求会等待向量完成；查询不会重新索引文档。模型失败时旧版本继续可读。
+                        </p>
+                    </form>
+                </div>
+            </section>
+            <section id="evaluation" class="tab-panel" hidden>
+                <div class="section-heading">
+                    <div>
+                        <div class="eyebrow">MEASURE, THEN IMPROVE</div>
+                        <h2>用问题集判断检索质量</h2>
+                        <p>
+                            9
+                            道固定问题，覆盖概念、版本、精确标识和无答案。这里只评测检索与证据门禁。
+                        </p>
+                    </div>
+                    <button id="evaluate" class="primary">
+                        运行检索评测 ↗
+                    </button>
+                </div>
+                <div id="eval-summary" class="eval-summary"></div>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>问题</th>
+                                <th>期望来源</th>
+                                <th>Top-5 命中</th>
+                                <th>RR@5</th>
+                                <th>门禁</th>
+                            </tr>
+                        </thead>
+                        <tbody id="eval-rows"></tbody>
+                    </table>
+                </div>
+                <p class="muted">
+                    合成样例用于回归教学流程，不代表真实中文语义检索能力；生成质量需要另做人工标注与忠实度评测。
+                </p>
+            </section>
+            <footer>
+                <span>少量、相关、有效、权限正确的证据。</span
+                ><span id="configuration">本地教学环境</span>
+            </footer>
+        </main>
+    </body>
 </html>

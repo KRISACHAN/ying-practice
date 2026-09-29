@@ -1,55 +1,148 @@
 <!doctype html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Skill Lab · 最小系统演示</title>
-    <link rel="stylesheet" href="/style.css" />
-    <script type="module" src="/app.js"></script>
-  </head>
-  <body>
-    <main class="shell">
-      <header class="hero">
-        <div class="eyebrow">KRISIN2026 / INTERACTIVE DEMO</div>
-        <h1>Skill Lab<span class="dot">.</span></h1>
-        <p>一条消息，怎样选中一个 Skill，再把它变成模型能执行的回复方法？在这里亲手跑一遍。</p>
-        <div class="flow" aria-label="Skill 执行流程">
-          <span>01 · 定义</span><b>→</b><span>02 · 选择</span><b>→</b><span>03 · 执行</span><b>→</b><span>04 · 组装</span>
-        </div>
-      </header>
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Skill Lab · 最小系统演示</title>
+        <link rel="stylesheet" href="/style.css" />
+        <script type="module" src="/app.js"></script>
+    </head>
+    <body>
+        <main class="shell">
+            <header class="hero">
+                <div class="eyebrow">KRISIN2026 / INTERACTIVE DEMO</div>
+                <h1>Skill Lab<span class="dot">.</span></h1>
+                <p>
+                    一条消息，怎样选中一个
+                    Skill，再把它变成模型能执行的回复方法？在这里亲手跑一遍。
+                </p>
+                <div class="flow" aria-label="Skill 执行流程">
+                    <span>01 · 定义</span><b>→</b><span>02 · 选择</span><b>→</b
+                    ><span>03 · 执行</span><b>→</b><span>04 · 组装</span>
+                </div>
+            </header>
 
-      <div class="layout">
-        <section class="panel composer">
-          <div class="section-heading"><span class="step">01</span><div><h2>输入一条消息</h2><p>试着比较普通聊天、自动触发与显式指定。</p></div></div>
-          <form id="run-form">
-            <label class="field-label" for="message">用户消息</label>
-            <textarea id="message" name="message" rows="5" maxlength="2000" placeholder="例如：我在两个工作机会之间很纠结，怎么选？">我在两个工作机会之间很纠结，怎么选？</textarea>
-            <div class="examples" aria-label="示例消息">
-              <button type="button" data-example="今天午饭吃了面。">普通闲聊</button>
-              <button type="button" data-example="你先听我说，我今天很委屈，不想听建议。">主动倾听</button>
-              <button type="button" data-example="我在两个工作机会之间很纠结，怎么选？">决策澄清</button>
-              <button type="button" data-example="/goal-breakdown 帮我把备考目标拆成第一步">显式选择</button>
+            <div class="layout">
+                <section class="panel composer">
+                    <div class="section-heading">
+                        <span class="step">01</span>
+                        <div>
+                            <h2>输入一条消息</h2>
+                            <p>试着比较普通聊天、自动触发与显式指定。</p>
+                        </div>
+                    </div>
+                    <form id="run-form">
+                        <label class="field-label" for="message"
+                            >用户消息</label
+                        >
+                        <textarea
+                            id="message"
+                            name="message"
+                            rows="5"
+                            maxlength="2000"
+                            placeholder="例如：我在两个工作机会之间很纠结，怎么选？"
+                        >
+我在两个工作机会之间很纠结，怎么选？</textarea
+                        >
+                        <div class="examples" aria-label="示例消息">
+                            <button
+                                type="button"
+                                data-example="今天午饭吃了面。"
+                            >
+                                普通闲聊
+                            </button>
+                            <button
+                                type="button"
+                                data-example="你先听我说，我今天很委屈，不想听建议。"
+                            >
+                                主动倾听
+                            </button>
+                            <button
+                                type="button"
+                                data-example="我在两个工作机会之间很纠结，怎么选？"
+                            >
+                                决策澄清
+                            </button>
+                            <button
+                                type="button"
+                                data-example="/goal-breakdown 帮我把备考目标拆成第一步"
+                            >
+                                显式选择
+                            </button>
+                        </div>
+                        <div class="controls">
+                            <label class="live-control"
+                                ><input type="checkbox" id="live" /><span
+                                    >调用模型并显示回复</span
+                                ><small id="live-hint"
+                                    >检查服务配置中…</small
+                                ></label
+                            >
+                        </div>
+                        <button class="primary" type="submit" id="run-button">
+                            运行 Skill <span>↗</span>
+                        </button>
+                    </form>
+                    <p class="notice">
+                        配置模型后默认生成真实回复；取消勾选可只查看 Skill
+                        选择与提示词。
+                    </p>
+                </section>
+
+                <section class="panel result" aria-live="polite">
+                    <div class="section-heading">
+                        <span class="step">02</span>
+                        <div>
+                            <h2>观察执行结果</h2>
+                            <p>每轮最多选择一个 Skill。</p>
+                        </div>
+                    </div>
+                    <div id="status" class="status">等待运行</div>
+                    <div class="result-card">
+                        <div class="mini-label">SELECTED SKILL</div>
+                        <h3 id="selected-name">等待输入</h3>
+                        <p id="selected-detail">运行后会显示触发来源与版本。</p>
+                    </div>
+                    <div class="result-card">
+                        <div class="mini-label">PROMPT SKILL RUNNER</div>
+                        <p id="instruction">
+                            选中的 Skill 将返回一段过程指令。
+                        </p>
+                    </div>
+                    <details class="prompt-details">
+                        <summary>
+                            查看最终发送给模型的消息 <span>↘</span>
+                        </summary>
+                        <pre id="messages">尚未组装</pre>
+                    </details>
+                    <div class="reply-block" id="reply-block">
+                        <div class="mini-label">MODEL REPLY</div>
+                        <p id="reply">
+                            等待运行。配置模型后，回复会显示在这里。
+                        </p>
+                    </div>
+                </section>
             </div>
-            <div class="controls">
-              <label class="live-control"><input type="checkbox" id="live" /><span>调用模型并显示回复</span><small id="live-hint">检查服务配置中…</small></label>
-            </div>
-            <button class="primary" type="submit" id="run-button">运行 Skill <span>↗</span></button>
-          </form>
-          <p class="notice">配置模型后默认生成真实回复；取消勾选可只查看 Skill 选择与提示词。</p>
-        </section>
 
-        <section class="panel result" aria-live="polite">
-          <div class="section-heading"><span class="step">02</span><div><h2>观察执行结果</h2><p>每轮最多选择一个 Skill。</p></div></div>
-          <div id="status" class="status">等待运行</div>
-          <div class="result-card"><div class="mini-label">SELECTED SKILL</div><h3 id="selected-name">等待输入</h3><p id="selected-detail">运行后会显示触发来源与版本。</p></div>
-          <div class="result-card"><div class="mini-label">PROMPT SKILL RUNNER</div><p id="instruction">选中的 Skill 将返回一段过程指令。</p></div>
-          <details class="prompt-details"><summary>查看最终发送给模型的消息 <span>↘</span></summary><pre id="messages">尚未组装</pre></details>
-          <div class="reply-block" id="reply-block"><div class="mini-label">MODEL REPLY</div><p id="reply">等待运行。配置模型后，回复会显示在这里。</p></div>
-        </section>
-      </div>
-
-      <section class="catalog"><div class="catalog-heading"><div><div class="eyebrow">STATIC REGISTRY</div><h2>内置 Skill</h2></div><p>Manifest 记录 Skill 身份与版本；匹配规则与指令留在服务端。</p></div><div id="skill-list" class="skill-grid"></div></section>
-      <footer>Prompt Skill 只改变回复方法。多轮状态与工具权限属于后续阶段。<a href="https://aicompanion.usehook.cn/65-agent-prompt-skill-stage-one/">阅读参考文章 ↗</a></footer>
-    </main>
-  </body>
+            <section class="catalog">
+                <div class="catalog-heading">
+                    <div>
+                        <div class="eyebrow">STATIC REGISTRY</div>
+                        <h2>内置 Skill</h2>
+                    </div>
+                    <p>
+                        Manifest 记录 Skill
+                        身份与版本；匹配规则与指令留在服务端。
+                    </p>
+                </div>
+                <div id="skill-list" class="skill-grid"></div>
+            </section>
+            <footer>
+                Prompt Skill 只改变回复方法。多轮状态与工具权限属于后续阶段。<a
+                    href="https://aicompanion.usehook.cn/65-agent-prompt-skill-stage-one/"
+                    >阅读参考文章 ↗</a
+                >
+            </footer>
+        </main>
+    </body>
 </html>
