@@ -126,6 +126,94 @@ const messages = await template.formatMessages({
 
 节点返回部分状态更新；不要依赖直接修改传入对象来传播结果。[2]
 
+
+### Node、Edge、State：分别负责什么
+
+**Node 执行操作，Edge 决定后续调度，State 保存步骤之间交换的数据。** 这是 LangGraph 的图执行概念。[7]
+
+| 对比项 | Node（节点） | Edge（边） |
+| --- | --- | --- |
+| 核心职责 | 完成一个步骤 | 连接步骤、决定下一步 |
+| 本例代码 | `addNode('route', ...)` | `addConditionalEdges('route', ...)` |
+| 本例结果 | 返回 `{ direction: 'comfort' }` | 选择名为 `comfort` 的节点 |
+| 是否调用模型 | 可以，也可以只是普通函数 | 本例只读取分类结果 |
+| 工程建议 | 放分类、检索、生成等业务操作 | 保持路由简单，把昂贵操作放进节点 |
+
+**LangChain 和 LangGraph 不是各有一套需要互相转换的 node/edge。** 本例的 `ChatPromptTemplate` 是 LangChain 组件，调用它的 `prompt` 函数才是注册到 LangGraph 的节点。LangChain 的 `createAgent` 则在高层封装了基于 LangGraph 的 Agent 执行，通常不必自己定义模型与工具之间的全部连线。[1][8]
+
+### 用本例看清“计算结果”和“选择路径”
+
+下面只放大实际工作流的分支部分；菱形代表条件边的判断，**不是额外注册的节点**。
+
+```mermaid
+flowchart TD
+  route["route 节点：判断关键词"] --> state["State 更新 direction"]
+  state --> choice{"条件边：读取 direction"}
+  choice -->|comfort| comfort["comfort 节点：写入安慰策略"]
+  choice -->|daily| daily["daily 节点：写入日常策略"]
+  comfort --> memory["memory 节点：展示历史条数"]
+  daily --> memory
+```
+
+对应代码摘录（省略事件包装和其他节点，不是独立程序）：
+
+```ts
+.addNode('route', state => ({
+  // 节点负责计算，返回部分状态；不是直接跳转。
+  direction: /难过|累|烦|委屈|压力|孤独/.test(state.question)
+    ? 'comfort'
+    : 'daily',
+}))
+.addConditionalEdges('route', state =>
+  // 条件边读取更新后的状态，返回目标节点名。
+  state.direction === 'comfort' ? 'comfort' : 'daily',
+)
+.addNode('comfort', () => ({
+  strategy: '先共情和倾听，再问一个温和的问题。',
+}))
+.addNode('daily', () => ({
+  strategy: '轻松自然地交流，结合用户话题提问。',
+}))
+.addEdge('comfort', 'memory')
+.addEdge('daily', 'memory')
+```
+
+输入“今天工作好累”时，可以逐步检查：
+
+| 时刻 | 本例发生的变化 |
+| --- | --- |
+| 调用 `graph.invoke` | 初始化 `question`，其余三个字符串字段为空 |
+| `route` 完成 | 返回 `{ direction: 'comfort' }`；其他字段保留 |
+| 条件边求值 | 读取 `direction`，只选择 `comfort` |
+| `comfort` 完成 | 更新 `strategy`；不会执行 `daily` |
+| 固定边生效 | 进入 `memory`，随后进入 `prompt` |
+| `prompt` 完成 | 调用 LangChain 组合消息，消息保存在请求闭包中；返回 `{}` |
+| `model` 完成 | 返回 `{ answer: ... }`，随后执行 `reply` 并到达 `END` |
+
+因此，本例既有通过 State 传递的策略，也有闭包中的历史与消息。不能把图上的每一条连线都理解成“上一个函数的返回值直接作为下一个函数的唯一参数”。恢复执行时的闭包限制见下文“持久化与本例的差距”。
+
+### 固定边、条件边、并行与循环怎样区分
+
+以下调度语义来自 Graph API；除固定边和单分支选择外，其余是扩展知识，本例尚未实现。[7]
+
+| 形式 | 含义 | AI 伴侣场景 |
+| --- | --- | --- |
+| `addEdge('memory', 'prompt')` | 固定后继 | 查看历史后组合消息 |
+| `addConditionalEdges(...)` | 按状态选择一个或多个后继 | 本例每次只选择一种回应策略 |
+| 从一个节点连接多个后继 | 多个步骤可以并行执行 | 扩展：同时查偏好与活动 |
+| `addEdge(['preferences', 'activities'], 'plan')` | 等待列出的前置节点都完成 | 扩展：资料齐备后生成约会方案 |
+| 条件边指回之前的节点 | 形成循环 | 扩展：检查回答，不合格则有限次重写 |
+
+本例 `comfort → memory` 与 `daily → memory` 是互斥分支汇合，**不表示等待两个分支都执行**。如果扩展为真正的并行任务，要显式设计汇合条件；多个并行节点更新同一个状态字段时，还需要合适的 reducer 合并更新。
+
+`START` 和 `END` 是入口、出口标记。若使用 `Command` 在节点里同时更新状态并指定下一步，应避免再为同一跳转保留会额外触发执行的固定出边。[7]
+
+### 和页面 React Flow 的关系
+
+后端 `StateGraph` 决定实际执行；前端 React Flow 负责展示。本例以节点 ID 将后端的 `running/done/error` 事件映射到图上，连线布局由前端定义。调整页面连线不会修改后端流程，新增后端节点也不会自动生成前端图。
+
+新增业务步骤时，应一起核对后端节点与边、事件类型以及前端图定义。页面回放仅重放已收到的事件，不会再次执行这些节点。
+
 ### 实践建议
 
 - **节点对应可解释的业务步骤**：需要单独观察、重试或恢复的操作适合独立成节点；不要为每一行代码创建节点。
@@ -248,6 +336,11 @@ LANGSMITH_PROJECT=agent-stack-web-demo
 - [5] [LangSmith Observability](https://docs.langchain.com/langsmith/observability)
 - [6] [LangSmith Evaluation types](https://docs.langchain.com/langsmith/evaluation-types)
 
+- [7] [LangGraph Graph API：State、Nodes、Edges](https://docs.langchain.com/oss/javascript/langgraph/graph-api)
+- [8] [LangChain Agents](https://docs.langchain.com/oss/javascript/langchain/agents)
+
 ## English overview
 
 LangChain provides composable AI application and agent components; this demo uses only its prompt/message utilities. LangGraph controls state and branching. LangSmith observes and evaluates execution. The Vercel AI SDK is the model transport in this implementation. Local replay, checkpoints, conversation history, and long-term memory are distinct capabilities. Current limitations and production recommendations are explicitly separated throughout this guide.
+
+Nodes perform work, edges schedule subsequent steps, and state carries updates. In this demo, LangChain prompt utilities run inside a LangGraph node; React Flow visualizes backend events without controlling execution.
