@@ -22,5 +22,4 @@
 
 欢迎交流技术、项目实践，以及生活中的有趣想法。
 
-![公众号二维码](https://fish-pond-1253945200.cos.ap-guangzhou.myqcloud.com/img/base/qrcode-all1.png)
-
+![公众号二维码](./assets/qrcode-all.png)
