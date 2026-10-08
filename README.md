@@ -24,4 +24,3 @@
 
 ![公众号二维码](https://fish-pond-1253945200.cos.ap-guangzhou.myqcloud.com/img/base/qrcode-all1.png)
 
-图片同时包含微信公众号与微信交流群二维码。
