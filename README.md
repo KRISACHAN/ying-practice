@@ -22,9 +22,6 @@
 
 欢迎交流技术、项目实践，以及生活中的有趣想法。
 
-- 微信：`krisChans95`
-- 公众号二维码：
-
 ![公众号二维码](https://fish-pond-1253945200.cos.ap-guangzhou.myqcloud.com/img/base/qrcode-all1.png)
 
-若图片因外部图床访问限制无法显示，可[点击查看原图](https://fish-pond-1253945200.cos.ap-guangzhou.myqcloud.com/img/base/qrcode-all1.png)。
+图片同时包含微信公众号与微信交流群二维码。
