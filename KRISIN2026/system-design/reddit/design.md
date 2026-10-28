@@ -419,14 +419,14 @@ ORDER BY created_at ASC, id ASC LIMIT $3;
 | PUT | `/v1/communities/:id/membership` | 加入社区；重试幂等 |
 | DELETE | `/v1/communities/:id/membership` | 退出社区；不存在也可视为成功 |
 | POST | `/v1/communities/:id/posts` | 发帖（带 Idempotency-Key） |
-| GET | `/v1/communities/:id/posts?sort=new|hot|top` | 社区信息流，限制 limit |
+| GET | `/v1/communities/:id/posts?sort={mode}` | 社区信息流；mode 可为 new、hot、top，限制 limit |
 | GET | `/v1/posts/:id` | 帖子正文、可见性、计数、我的投票 |
-| PUT | `/v1/posts/:id/vote` | 请求体：`{"value":-1|0|1}`；目标状态幂等 |
+| PUT | `/v1/posts/:id/vote` | 请求体 value 为 -1、0、1 之一；目标状态幂等 |
 | GET | `/v1/posts/:id/comments` | 根评论分页 |
 | POST | `/v1/posts/:id/comments` | 创建评论（parentId 可空） |
 | GET | `/v1/comments/:id/replies` | 子评论分页 |
 | PUT | `/v1/comments/:id/vote` | 评论投票，同帖子投票 |
-| GET | `/v1/me/feed?sort=new|hot` | 已订阅社区首页 |
+| GET | `/v1/me/feed?sort={mode}` | 已订阅社区首页；mode 可为 new、hot |
 | POST | `/v1/moderation/posts/:id/remove` | 审核员移除，服务端鉴权 |
 | GET | `/v1/search?q=...` | P1 搜索 |
 
@@ -983,7 +983,7 @@ reddit-go/
 
 ~~~go
 type VoteInput struct {
-    Value int `json:"value" binding:"oneof=-1 0 1"`
+    Value *int `json:"value" binding:"required,oneof=-1 0 1"`
 }
 
 func (h *Handler) SetPostVote(c *gin.Context) {
@@ -994,7 +994,7 @@ func (h *Handler) SetPostVote(c *gin.Context) {
     }
     userID := MustAuthenticatedUserID(c) // 认证中间件设置
     result, err := h.votes.SetPostVote(
-        c.Request.Context(), userID, c.Param("id"), in.Value,
+        c.Request.Context(), userID, c.Param("id"), *in.Value,
     )
     if err != nil {
         WriteDomainError(c, err)
@@ -1004,7 +1004,7 @@ func (h *Handler) SetPostVote(c *gin.Context) {
 }
 ~~~
 
-这个片段是职责说明；还需实现身份解析、严格 JSON 未知字段处理、UUID 解析与错误映射。`ShouldBindJSON` 不意味着自动拒绝所有额外字段。Service 内通过 `pgxpool.BeginTx` 开事务，`defer tx.Rollback(ctx)`，成功 `tx.Commit(ctx)`；同一事务操作不要绕过 `tx` 使用独立 pool 连接。
+这个片段是职责说明；使用指针字段与 required 校验是为了区分「没有传 value」与合法的 value=0；还需实现身份解析、严格 JSON 未知字段处理、UUID 解析与错误映射。`ShouldBindJSON` 不意味着自动拒绝所有额外字段。Service 内通过 `pgxpool.BeginTx` 开事务，`defer tx.Rollback(ctx)`，成功 `tx.Commit(ctx)`；同一事务操作不要绕过 `tx` 使用独立 pool 连接。
 
 ### 15.4 Go 并发模型如何服务于 Reddit
 
