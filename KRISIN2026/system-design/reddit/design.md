@@ -1,6 +1,6 @@
 # Design Reddit：社区、帖子、投票与信息流系统设计（System Design）
 
-> **版本**：1.0 · 2026-10-28
+> **版本**：1.1 · 2026-10-28
 >
 > **定位**：系统设计面试 + 数据建模 + Node.js / Go 工程实践参考
 >
@@ -48,9 +48,9 @@
 | P0 | 审核与删除 | 已移除内容不能从缓存和首页继续对外展示；权限校验由服务端执行 |
 | P1 | 评论投票、通知 | 与帖子投票同类设计；通知最终一致 |
 | P1 | 搜索、媒体上传 | PostgreSQL FTS 基线；对象存储与 CDN |
-| P2 | Best 个性化、Rising、多模态审核、广告 | 给出演进设计，不在 MVP 落地 |
+| P2 | Home Hot、Best 个性化、Rising、多模态审核、广告 | 给出演进设计，不在 MVP 落地 |
 
-**重要区分**：Reddit 官方描述的 Home/Popular、Hot/Top/New、Best 个性化并非同一概念。本文 MVP 中的 Home 默认是**已订阅社区的混合时间流**；Hot 为**自行定义的趋势分**；Best/Recommended 留到扩展阶段，不能把 Hot 简单称为 Reddit 实际推荐算法。参见 [Reddit 内容推荐说明](https://support.reddithelp.com/hc/en-us/articles/23511859482388-Reddit-s-Approach-to-Content-Recommendations) 与 [Home / Popular 帮助页](https://support.reddithelp.com/hc/en-us/articles/360043043552-What-s-the-difference-between-r-all-r-popular-news-and-my-home-feed)。
+**重要区分**：Reddit 官方描述的 Home/Popular、Hot/Top/New、Best 个性化并非同一概念。本文 MVP 中的 Home 仅支持**已订阅社区的混合 New 时间流**；社区 Hot 为**自行定义的净票数与发布时间评分**；Home Hot 与 Best/Recommended 留到扩展阶段，不能把 Hot 简单称为 Reddit 实际推荐算法。参见 [Reddit 内容推荐说明](https://support.reddithelp.com/hc/en-us/articles/23511859482388-Reddit-s-Approach-to-Content-Recommendations) 与 [Home / Popular 帮助页](https://support.reddithelp.com/hc/en-us/articles/360043043552-What-s-the-difference-between-r-all-r-popular-news-and-my-home-feed)。
 
 ### 1.3 非功能需求（Non-functional Requirements）
 
@@ -361,7 +361,7 @@ CREATE TABLE processed_events (
 
 **注意 4 个关键边界**：
 
-1. `PRIMARY KEY (user_id, post_id)` 约束的是「当前唯一票」，不是「每个人一生只能投一次」；撤销时删除这行，重新投票可再插入。
+1. `PRIMARY KEY (user_id, post_id)` 约束的是「当前唯一票」，不是「每个人一生只能投一次」；MVP 撤销时删除这行，重新投票可再插入。第 8.3 节异步扩容会迁移为保留 0 值状态行，不能直接混用两种写协议。
 2. 复合外键 `FOREIGN KEY (post_id, parent_id)` 阻止把 A 帖子的评论作为 B 帖子的父节点；但**不会自动禁止多节点循环**。本题禁止修改 parent，插入时必须校验父节点、深度和帖子状态。
 3. `post_votes` 的事实与 `posts.upvotes/downvotes` 是两种数据。必须用一个清晰的写入协议保持同步，或明确宣布计数是异步投影并提供对账。
 4. 检查父评论、禁言、社区权限、用户状态是**业务不变量**，不能指望只有外键就能落实；与这些事实竞争的更新要使用事务/行锁或版本检查。
@@ -393,16 +393,32 @@ LIMIT $4;
 ### 5.4 评论分页：只加载一层，避免无限递归
 
 ~~~sql
--- 首屏根评论
-SELECT * FROM comments
+-- 根评论倒序；$2/$3 是上一页最后一个节点的 created_at/id。
+-- 首次请求两者均为空；$4 = 经校验的 page_size + 1，用额外一行判断 hasMore。
+SELECT id, post_id, parent_id, depth, status, created_at,
+       CASE WHEN status = 'VISIBLE' THEN author_id ELSE NULL END AS author_id,
+       CASE WHEN status = 'VISIBLE' THEN body ELSE NULL END AS body
+FROM comments
 WHERE post_id = $1 AND parent_id IS NULL
-ORDER BY created_at DESC, id DESC LIMIT $2;
+  AND ($2::timestamptz IS NULL
+       OR (created_at, id) < ($2::timestamptz, $3::uuid))
+ORDER BY created_at DESC, id DESC LIMIT $4;
 
--- 点击「展开回复」才取下一层，使用上述 children 索引
-SELECT * FROM comments
+-- 子评论正序；$2 是父评论，$3/$4 是该父节点下的分页位置。
+-- $5 = page_size + 1；与根评论使用相反的 seek 方向。
+SELECT id, post_id, parent_id, depth, status, created_at,
+       CASE WHEN status = 'VISIBLE' THEN author_id ELSE NULL END AS author_id,
+       CASE WHEN status = 'VISIBLE' THEN body ELSE NULL END AS body
+FROM comments
 WHERE post_id = $1 AND parent_id = $2
-ORDER BY created_at ASC, id ASC LIMIT $3;
+  AND ($3::timestamptz IS NULL
+       OR (created_at, id) > ($3::timestamptz, $4::uuid))
+ORDER BY created_at ASC, id ASC LIMIT $5;
 ~~~
+
+执行查询前先验证帖子与社区可访问；回复接口还需从父评论解析并校验所属帖子，不能只检查父评论 ID。这里保留 `REMOVED/DELETED` 节点维持树结构，但正文和作者已遮罩，API 将其映射为 tombstone，不直接序列化数据库行。父评论变成 tombstone 不自动隐藏仍可见的子评论；整棵子树移除需要另行定义审核策略。
+
+响应为 `{items, nextCursor, hasMore}`：最多返回 page_size 个节点；只有存在额外一行时才生成 nextCursor，位置取**最后一个已返回节点**，不能取那条额外行。游标绑定 `postId、parentId（根层为空）、排序方向、createdAt、id、expiresAt` 并签名；时间与 ID 必须同时提供，parent 不匹配或游标无效返回 422，过期返回 `cursor_expired`。两层游标不能互换，时间相同的节点由 UUID 确定顺序。保留 tombstone 的查询不会因单纯删评而跳过后续回复；跨页新插入和实时审核仍不属于完整快照一致性。
 
 按层分页通常比一次递归拉取整棵上万节点的树更适合用户界面。递归 CTE、物化路径（`ltree`）、Closure Table、移动子树和排序细节留给独立的 Nested Comment System 深挖。[PostgreSQL 递归 CTE](https://www.postgresql.org/docs/current/queries-with.html)。
 
@@ -422,11 +438,11 @@ ORDER BY created_at ASC, id ASC LIMIT $3;
 | GET | `/v1/communities/:id/posts?sort={mode}` | 社区信息流；mode 可为 new、hot、top，限制 limit |
 | GET | `/v1/posts/:id` | 帖子正文、可见性、计数、我的投票 |
 | PUT | `/v1/posts/:id/vote` | 请求体 value 为 -1、0、1 之一；目标状态幂等 |
-| GET | `/v1/posts/:id/comments` | 根评论分页 |
+| GET | `/v1/posts/:id/comments?cursor=...&limit=...` | 根评论倒序分页，返回 tombstone 与 nextCursor |
 | POST | `/v1/posts/:id/comments` | 创建评论（parentId 可空） |
-| GET | `/v1/comments/:id/replies` | 子评论分页 |
+| GET | `/v1/comments/:id/replies?cursor=...&limit=...` | 同一父节点下的子评论正序分页 |
 | PUT | `/v1/comments/:id/vote` | 评论投票，同帖子投票 |
-| GET | `/v1/me/feed?sort={mode}` | 已订阅社区首页；mode 可为 new、hot |
+| GET | `/v1/me/feed?sort=new` | MVP 仅支持已订阅社区 New 时间流；hot/best 返回 422 |
 | POST | `/v1/moderation/posts/:id/remove` | 审核员移除，服务端鉴权 |
 | GET | `/v1/search?q=...` | P1 搜索 |
 
@@ -472,6 +488,8 @@ ORDER BY created_at ASC, id ASC LIMIT $3;
 ~~~
 
 事件 ID、版本、时间与 payload 在事务里固定，重试不能重新造「看似新事件」。增量事件重复执行会造成计数错误，消费端要么基于 `eventId` 去重，要么从事实表重算投影。
+
+上例为 **MVP 的 v1 事件**，`aggregateVersion` 由已锁定的 `posts.version` 提供；增量事件不能仅因版本较旧就丢弃，否则可能漏加尚未处理的差量。第 8.3 节扩容改用 `post.vote_state_changed.v2`：`aggregateType=post_vote`、`aggregateId=vote_id`、`aggregateVersion=vote_version`，payload 包含 `postId、userId、oldValue、newValue`。v2 携带绝对票状态，版本只在同一 vote_id 内比较，不表示全帖顺序；内容审核仍使用独立的 post 内容版本。生产者切换协议必须同步迁移消费者。
 
 ---
 
@@ -570,11 +588,52 @@ COMMIT;
 
 唯一键只能保证当前投票最多一行，**不能自动正确更新聚合计数**。例如两请求把旧值 +1 同时改成 -1，只写事实表很容易令两条事件都把 upvotes 减一、downvotes 加一。
 
-可选解决方式：
+MVP 使用第 8.2 节的帖子锁。扩容时需要把串行化范围缩小到**同一用户对同一帖子的一条票状态**，同时保留首次投票的并发保护。仅对旧票执行 `SELECT ... FOR UPDATE` 不够：首次投票没有可锁的行，两次请求可能都读到 0，再各自产生一个不同 eventId 的 `+1` 事件；事实唯一也会被统计成两票。
 
-- 初期：锁帖子行 → 查旧值 → 原子维护投票和计数。
-- 扩容：投票事实行依旧唯一，改成**带版本的投票变化记录 / outbox 增量**，由按 postId 有序的聚合器/幂等消费者更新统计；须定义并发改票的 old/new 获取与顺序。
-- 更高写入量：把计数拆成 **N 个 shard bucket**、追加事件后增量聚合、或周期从事实表对账；接受显示分数短暂延迟。
+**异步阶段的 schema 迁移**（替代 MVP 的撤票 DELETE 协议）：
+
+~~~sql
+-- 标准 DDL 在第 5.2 节创建的 CHECK 名为 post_votes_value_check。
+ALTER TABLE post_votes DROP CONSTRAINT post_votes_value_check;
+ALTER TABLE post_votes ADD CONSTRAINT post_votes_value_check
+  CHECK (value IN (-1,0,1));
+ALTER TABLE post_votes ADD COLUMN vote_id uuid NOT NULL DEFAULT gen_random_uuid();
+ALTER TABLE post_votes ADD CONSTRAINT post_votes_vote_id_key UNIQUE (vote_id);
+ALTER TABLE post_votes ADD COLUMN vote_version bigint NOT NULL DEFAULT 0
+  CHECK (vote_version >= 0);
+~~~
+
+写入协议如下（同一个事务、READ COMMITTED）：
+
+1. 按统一锁顺序校验用户、社区与帖子状态。帖子使用 `FOR SHARE` 与修改可见性的事务协调；不同投票请求的共享锁兼容。禁言检查还需与封禁写入共享一个始终存在的锁定对象，不能试图锁住不存在的 ban 行。相关权限写入必须遵循同一协议。
+2. 执行下面的 INSERT，为首次投票建立持久的 0 值状态行；唯一冲突时等待竞争事务结束。随后在**下一条 SQL** 锁定并读取状态行，取得最新 old/value/version。
+3. old==new 则无操作返回；否则按旧状态更新 value、vote_version+1，同事务写 v2 Outbox。撤票写 value=0，不删除行，也不重置 vote_id/version。
+4. 提交后返回本次权威 viewerVote/voteVersion；显示计数来自带 `asOf` 的异步读模型，可能暂未包含本次投票。不再逐票更新 `posts` 的计数或 version，否则帖子热点锁仍然存在。
+
+~~~sql
+-- 前置：BEGIN 和权限检查/必要的共享锁已经完成。
+INSERT INTO post_votes(user_id, post_id, value)
+VALUES ($1, $2, 0)
+ON CONFLICT (user_id, post_id) DO NOTHING;
+
+SELECT vote_id, value, vote_version
+FROM post_votes WHERE user_id = $1 AND post_id = $2
+FOR UPDATE;
+-- 服务层比较 old/new；无变化时直接提交，不产生事件。
+-- 有变化时 UPDATE value/version + INSERT v2 outbox，再 COMMIT。
+~~~
+
+**异步统计如何接住重复和乱序**：消费者维护以 vote_id 唯一的投影记录 `(lastVersion,lastValue,postId)`，全新票的 lastVersion/lastValue 初始均为 0。
+
+1. 先按第 12.2 节在事务内领取 eventId，重复事件直接跳过；再用 INSERT ON CONFLICT + 行锁建立/锁住该票投影。
+2. 仅接受更高版本的绝对 newValue，按「投影旧值 → 事件新值」计算 up/down 差量，更新独立 `post_stats` 读模型。事件的 postId 必须与投影绑定的帖子一致。
+3. 投影记录、统计和 processed_events 在同一 PostgreSQL 事务内提交。旧版本事件可记录已处理但不能回退投影；批量处理时统一锁顺序，避免不同 worker 交叉锁定多票/多帖。
+
+不能直接累加事件中由生产者计算的 old/new 差量：例如同一 v2 事件协议下，vote_version=2 的撤票先于 vote_version=1 的加票到达，绝对状态投影应保持 0，不能先减成负数。
+
+统计 worker 仍可能争用同一个 post_stats 行，但已移出 HTTP 命令事务，可以批量合并同帖差量；更高吞吐时再拆 N 个统计 bucket。定期在一致的数据库快照中核对事实与投影，修复也必须与 worker 协调，不能用一个过时的 COUNT 直接覆盖更新中的计数。Redis 只缓存统计结果，外部写入边界见第 12.2 节。
+
+**切换与恢复边界**：学习实现可采用维护窗口：暂停投票写入 → 排空 v1 Outbox/消费者 → 迁移表 → 从同一事实快照初始化每票投影与 post_stats → 部署 v2 读写路径 → 恢复。已有票初始版本为 0，后续从 1 递增；全新 vote_id 的投影初值为 0。切换后对账与用户读取都以新模型为准，不再读旧 posts 计数。v2 的 0 值行与版本不能随意清理，否则迟到事件可能复活旧票；线上无停机迁移和回退需要额外设计，不能直接让 v1 DELETE 与 v2 写入同时运行。
 
 **不要**把「用 Redis INCR」当作事实表和计数表跨系统原子一致的答案。Redis 挂掉或重复消费会让聚合漂移，必须能重建和核对。
 
@@ -595,14 +654,13 @@ sequenceDiagram
   participant U as User
   participant A as Feed API
   participant DB as PostgreSQL
-  participant C as Redis / Snapshot
   U->>A: GET /me/feed?sort=new&cursor=...
   A->>DB: Load membership / authorization
   A->>DB: Read posts with keyset pagination
   DB-->>A: Candidates
   A->>A: Filter / hydrate / deduplicate
   A-->>U: Items + nextCursor
-  Note over A,C: Hot 时优先查询版本化候选快照
+  Note over A,DB: MVP Home 仅支持 New，订阅与可见性实时检查
 ~~~
 
 从「用户订阅了 N 个社区」开始思考：
@@ -612,6 +670,8 @@ sequenceDiagram
 - **巨大 N / 个性化**：聚合服务做候选生成 → 权限/安全过滤 → 排名 → 多样性 → 曝光跟踪；把机器学习推荐视作独立 P2。
 
 Fan-out on Write = 发帖时向粉丝 inbox 写扩散；Fan-out on Read = 读者打开首页时汇聚候选。对大社区用全量写扩散非常昂贵，实践中常采用**混合方案**：普通社区适当预计算，超大社区读时聚合。
+
+**MVP 边界**：社区流支持 New/Top/Hot，Home 只支持 New；不能把多个社区各自固定的 Hot generation 直接当作整个 Home 的稳定版本。若 P2 开放 Home Hot，首次请求需保存本次合并后的 postId 顺序，使用绑定 userId 的 `homeSessionId + lastPosition + expiresAt` 游标；后续只遍历该会话快照，同时实时检查订阅与可见性并补取。取消订阅立即过滤，新增订阅从下一次浏览会话纳入；会话到期返回 cursor_expired。按需生成、有界候选量和 TTL 控制其每用户存储成本，不能默认全量预计算所有用户。
 
 ---
 
@@ -623,7 +683,7 @@ Fan-out on Write = 发帖时向粉丝 inbox 写扩散；Fan-out on Read = 读者
 | --- | --- | --- |
 | New | 最新发布优先 | PostgreSQL `(created_at DESC,id DESC)` 索引 |
 | Top | 指定时间窗内净分最高 | 候选时间过滤 + 排名快照，必要时计数投影 |
-| Hot | 高互动且相对新鲜 | 自定义随时间衰减评分 + 定时物化 |
+| Hot | 高互动且相对新鲜 | 自定义净票数/发布时间评分 + 版本化快照 |
 | Best / Recommended | 考虑用户历史、内容、安全、多样性 | 候选生成/过滤/预测/重排，非 MVP |
 
 Reddit 官方对各种排序的产品描述可见 [Reddit 内容推荐方法](https://support.reddithelp.com/hc/en-us/articles/23511859482388-Reddit-s-Approach-to-Content-Recommendations)。本文示例 Hot 公式是**教学自定义公式**，不是声称 Reddit 当前线上公式。
@@ -639,10 +699,20 @@ hot_score = ln(1 + max(0, net)) - age_hours / 36
 ~~~
 
 - 对数削弱超大票数的支配力。
-- 年龄衰减使新内容有进入窗口的机会。
+- 相同净票数下偏好更新的帖子。
 - `36` 是可调整的示例超参数；只用净票数不能代表真实内容质量。
 - 生产时还需抑制作弊、冷启动、敏感内容、语言/地区、社区公平性等因素。
-- 热分随时间变化，**不可用 PostgreSQL 依赖 now() 的生成列当作永久静态索引**；应计算并按刷新周期保存。
+
+**这个公式的时间性质必须讲清楚**：要求 created_at 由服务端产生且不在未来。以固定 epoch 为原点，把 now 和 created_at 换算为小时，则：
+
+~~~text
+hot_score = ln(1 + max(0, net)) + created_at_hours / 36 - now_hours / 36
+rank_score = ln(1 + max(0, net)) + created_at_hours / 36
+~~~
+
+`-now_hours/36` 是同一次排序中所有帖子的公共项，去掉不改变名次。因此，票数和候选集合不变时，时间流逝只让绝对 hot_score 同速下降，**不会改变相对排名**。例如两帖现在相差 2 分，36 小时后都减 1 分，仍相差 2 分。这是带发布时间偏好的简化排序，不代表最近一小时互动趋势。
+
+可以在投票投影或发布时间变化时维护 rank_score，再周期发布分页快照；周期发布用于吸收变更、更新候选窗口与稳定分页，不能解释成「这个公式因时间流逝必须全量重排」。含 now() 的表达式不适合作为 PostgreSQL 的生成列/索引表达式；去掉公共时间项后，也仍需选择符合数据库不可变性要求的表达式或显式维护普通列。若以后改用 `net / (age_hours + c)^gravity` 等具有不同年龄衰减速度的规则，才需重新讨论随时间重算、负分与零票边界。
 
 ### 9.3 Top 时间窗易混淆之处
 
@@ -719,8 +789,8 @@ CREATE INDEX ranked_entries_post_idx ON ranked_feed_entries(post_id);
 分阶段解法：
 
 1. **正确性基线**：第 8.2 节同事务计数，压测先测 p99、锁等待、死锁。
-2. **热点解耦**：投票事实保持 PostgreSQL 唯一；同事务记录单条投票状态变化和 Outbox，异步统计服务处理；展示计数允许延迟。
-3. **进一步扩容**：按 `postId` 分区事件处理、分片计数器或批量累计；定期从 `post_votes` 对账，保证可恢复。
+2. **热点解耦**：按第 8.3 节迁移为持久票状态与每票版本，同事务记录 v2 Outbox；串行化同一用户对同一帖子的修改，计数进入独立异步 post_stats，不再逐票增加 posts.version。
+3. **进一步扩容**：按 `postId` 分区有助于批处理，但不能假设多实例 Outbox 发布与重投天然有序；依靠每票绝对状态版本投影保证正确性，再批量/分片统计，定期与 `post_votes` 对账。
 4. **不能忽略**：如果事实写也被用户对同一对象高频改票打爆，需要速率限制与去重，不能只调大连接池。
 
 ---
@@ -774,16 +844,27 @@ sequenceDiagram
   MQ-->>P: Ack
   P->>DB: Mark published
   MQ->>W: Deliver / redeliver
-  W->>DB: INSERT processed_events + projection update
-  W-->>MQ: Ack
+  W->>DB: BEGIN: claim eventId + update PG projection
+  DB-->>W: COMMIT
+  W-->>MQ: Ack after commit
 ~~~
 
 - DB 提交后 publisher 宕机：恢复后继续发送。
 - broker 收到事件但 DB 未标记 published：可能重发。
-- worker 更新投影后、ACK 前宕机：可能重投；`processed_events(consumer_name,event_id)` 唯一键防重复处理。
+- worker 更新 PostgreSQL 投影后、ACK 前宕机：可能重投；消费者必须先在事务内 `INSERT processed_events ... ON CONFLICT DO NOTHING RETURNING event_id`，仅插入成功者更新投影，二者一起提交。只有一个唯一键而没有这条原子处理协议，不足以防重。
 - **Outbox 保证本地事实与「待发事件」同事务**，不保证跨 broker/消费者 exactly once。
 - 多实例扫描可用 `FOR UPDATE SKIP LOCKED` 领取短任务；标记和网络发送不能在长事务里无期限持锁，需租约/状态、过期重领、失败重试与监控。
 - 分数快照可以选择「收到更新标记为 dirty，周期全量重算」，降低对增量顺序的依赖。
+
+**Inbox 的原子性只覆盖同一个数据库事务中的效果**。若 Redis 写入或邮件发送位于事务外，先提交 processed 再调用外部系统会有「已标记但未执行」窗口，反过来则有「已执行但未标记」的重复窗口。分别定义恢复协议：
+
+| 目标 | 可承诺的效果与恢复方式 |
+| --- | --- |
+| PostgreSQL 投影/站内通知记录 | 与 Inbox 同事务写入；通知用 `(eventId,recipientId,channel)` 唯一键，一次事件最多产生一条对应记录 |
+| Redis 排名/统计缓存 | PG 提交投影时同事务登记可重试的缓存刷新任务；从权威投影生成完整版本结果，使用不可变 generation + 原子切指针，或原子版本比较后覆盖。重试不做无保护的 INCR；丢失后可从 PG 重建，旧任务不能回退新版本 |
+| 外部邮件/推送 | 同事务创建具有上述唯一键的发送任务，dispatcher 以租约领取、重试；供应商支持幂等键时传稳定任务 ID，并限定在其幂等保留期内重试。供应商不支持时采用至少一次发送，接受并监控可能重复，不能承诺只发送一次 |
+
+通知任务的持久化成功与供应商送达是两个状态，分别记录。供应商接受后、任务标记成功前宕机需要使用同一任务 ID 重试；单靠 Inbox 和 broker ACK 无法消除这个窗口。任务与消费去重记录的保留期还必须覆盖约定的重放窗口；超出窗口的人工重放需要专门的去重或重建策略。
 
 NATS JetStream 支持持久消息、重放、ACK 和至少一次投递；Core NATS 的纯发布订阅不具有相同持久语义。[NATS JetStream](https://docs.nats.io/concepts/jetstream)。
 
@@ -804,11 +885,11 @@ NATS JetStream 支持持久消息、重放、ACK 和至少一次投递；Core NA
 
 ### 13.1 必须成立的 Invariants
 
-1. 对任意用户 U 和帖子 P，`post_votes(U,P)` 最多一行，值只能 ±1；撤销为无行。
+1. 对任意用户 U 和帖子 P，`post_votes(U,P)` 最多一行；MVP 值只能 ±1、撤销为无行；异步阶段迁移为 -1/0/+1、撤销保留 0 值与单调递增的每票版本。
 2. 对固定时刻的权威投票表，`score = COUNT(value=1) - COUNT(value=-1)`；若采用异步显示计数，必须明确容差/时限并有对账机制。
 3. 一条评论只属于一个帖子；父评论若存在，必属于同帖；不允许移动父节点形成循环。
 4. 无权访问/已移除内容即使在旧缓存、旧排名或旧搜索索引里存在，也不应返回受保护正文。
-5. 创建型操作的重复请求不能制造多条相同资源；事件重试不能重复执行副作用。
+5. 创建型操作在幂等契约期内的重复请求不能制造多条相同资源；数据库投影与站内通知记录按事件去重。Redis 更新必须可重试且不回退版本；外部通知按供应商幂等能力与保留期定义保证，不笼统承诺 exactly once。
 
 ### 13.2 典型故障场景
 
@@ -817,7 +898,8 @@ NATS JetStream 支持持久消息、重放、ACK 和至少一次投递；Core NA
 | 同一用户两个标签页同时改票 | 事实唯一；锁/版本协议确定最终值与正确计数 |
 | DB 写成功、HTTP 响应丢失 | PUT 目标状态重试幂等；POST 使用幂等键 |
 | 两个用户给同帖投票 | 同事务计数不会丢更新，热点时统计异步 |
-| 投票事件重复消费 | Inbox 去重；有版本/增量时序控制 |
+| 投票事件重复/乱序消费 | Inbox 与 PG 投影同事务；v2 按每票绝对状态版本计算投影差量，不能丢弃未处理的 v1 增量 |
+| 外部通知已发送，任务尚未标记成功便宕机 | 同一稳定任务 ID 重试；供应商不支持幂等时可能重复，记录并监控 |
 | Post 被审核移除但仍在 Hot ZSET | 读时权限过滤和补取，异步失效缓存 |
 | 热榜 worker 宕机 | 延续上一个未过期 generation，标记排名滞后；必要时降级 New |
 | Redis 失效 | 从 PostgreSQL 读 New/详情；限制回源防 DB 雪崩 |
@@ -1095,7 +1177,7 @@ func (h *Handler) SetPostVote(c *gin.Context) {
 ### 18.1 单元测试
 
 - `setVote(old,new)` 九种状态组合（含 0→0），up/down delta 正确。
-- Hot 公式单调性、时间衰减、负分和零票边界。
+- Hot 公式随净票数单调不减、负分/零票边界；固定票数和候选下时间推进不改变相对名次，去掉公共时间项的排序等价。
 - 查询游标编码/解码、签名、过期、limit 上限。
 - 评论深度、跨帖父节点、已删父节点、最大深度。
 - 权限：未登录、被禁言、社区受限、MOD 恢复。
@@ -1110,11 +1192,15 @@ func (h *Handler) SetPostVote(c *gin.Context) {
 6. 插入跨帖回复、超过深度 20、直接自引用：正确拒绝；parent 不允许更新。
 7. POST 同一 Idempotency-Key 请求 100 次：只新建一个帖子；不同 payload 复用 key 返回 409。
 8. 投票和 Outbox 的提交前失败：必须全部回滚；提交后发布失败必须能恢复。
-9. 同一 eventId 重放 3 次：ranking/notification 等有副作用消费者只执行一次。
+9. 同一 eventId 重放 3 次：PG 投影与站内通知记录只变更一次；在 Inbox 插入后和投影更新后分别注入提交前失败，均完整回滚；提交后 ACK 前失败可安全重投。Redis/外部通知另测任务恢复协议。
 10. 新 generation 构建一半时宕机：仍使用旧 generation，读不到半成品。
 11. 翻页期间新投票改变排序：在有效 generation 内不重复/不跳页；过期返回明确错误。
 12. 旧排名和旧搜索命中已移除内容：接口必须不返回正文。
 13. 连续多次加入/退出社区：关系正确；不存在的退出仍可幂等处理。
+14. 运行异步阶段 schema 后，同一用户首次并发投票、撤票后并发重投：0 值状态行和 vote_id 保留，无重复版本/事件；验证重复目标状态不产生新事件，不再更新 posts.version/计数。
+15. v2 协议事件按「vote_version=2 撤票 → vote_version=1 加票」及重复/随机顺序送达：每票投影保留最新绝对状态，post_stats 与最终事实一致，无负计数。迁移后的 version=0 存量投影与计数初始化一致。
+16. 根评论/单个父节点下准备超过两页节点，包含相同时间戳、tombstone：正反 seek 各自无重复、无遗漏，nextCursor 不跳过额外行，隐藏正文/作者不返回；跨父节点复用游标拒绝，末页 nextCursor 为空。
+17. MVP Home 仅接受 sort=new；hot/best 返回 422。若实现 P2 Home Hot，则跨社区排名更新不改变会话顺序，退订立即过滤、新订阅下次会话纳入，过期不能偷偷切换新快照。
 
 集成测试使用真 PostgreSQL，不要用 SQLite 模拟行锁/事务隔离细节。
 
@@ -1126,6 +1212,8 @@ func (h *Handler) SetPostVote(c *gin.Context) {
 - PostgreSQL 主库短暂不可用、连接池耗尽；确认失败请求不产生半数据。
 - 搜索索引落后 10 分钟且内容被审核移除；依旧不能泄露已移除正文。
 - 删帖事件晚于恢复事件到达；有 aggregateVersion 防止旧事件覆盖新状态。
+- PG 缓存刷新任务提交后、Redis 写入前宕机，以及 Redis 写入后任务确认前宕机：任务可重试恢复，旧版本不覆盖新版本；清空 Redis 后可重建。
+- 通知任务提交后、供应商调用前宕机，以及供应商接受后任务确认前宕机：任务不丢；支持幂等的供应商在其保证期内不重复接受，不支持时如实记录可能重复。
 
 ### 18.4 性能压测
 
@@ -1145,7 +1233,7 @@ func (h *Handler) SetPostVote(c *gin.Context) {
 | B：投票和评论 | 投票状态事务、计数、嵌套回复与分页 | 并发不重计，跨帖回复失败 |
 | C：基本 Feed | 社区 New/Top、Home New、cursor | 索引与 keyset 有效，分页无误 |
 | D：Hot 与缓存 | 自定义 Hot、周期 ranking、Redis（可选） | 版本稳定、缓存过滤删除内容 |
-| E：可靠异步 | Outbox + worker → JetStream（可选） | 断电重放、重复消费无副作用 |
+| E：可靠异步 | Outbox + worker → JetStream（可选） | PG 投影同事务去重，缓存任务可恢复，外部通知保证符合供应商契约 |
 | F：规模演进 | 热帖异步/分片统计、搜索或个性化 | 对比压测结果和复杂度成本 |
 | G：双语言对照 | 用 Hono 重写已完成的 Gin API 路径 | 共同 OpenAPI、相同并发正确性 |
 
@@ -1174,7 +1262,7 @@ func (h *Handler) SetPostVote(c *gin.Context) {
 - **为什么不用 Redis 直接记投票？** Redis 可以缓存，但用户当前投票的唯一性、权限与持久化事务以 PostgreSQL 为准；跨系统更新会有丢失/重复窗口。
 - **为什么「一人只能投一票」还会统计错？** 唯一约束只管事实行，旧票到新票的差量可能在并发下被重复应用；必须锁/版本或幂等事件。
 - **热点帖子 10 万人同时点赞怎么办？** 先测行锁；正确性保留在票事实，计数采用异步聚合与定期对账，不强迫每票都锁同一帖子行。
-- **为什么 Hot 不直接 ORDER BY score DESC？** 那是粗略 Top，不含时间衰减；动态分数与大 OFFSET 造成性能和分页一致性问题。
+- **为什么 Hot 不直接 ORDER BY score DESC？** 那是粗略 Top，不含发布时间偏好；本题 Hot 可去掉公共时间项，投票和候选变化仍会改变排序，需用快照保护跨页读取并避免大 OFFSET。
 - **为什么不用给每个订阅者写 inbox？** 超大社区的发布事件会写扩散到海量订阅者；大社区更适合读时混合候选。
 - **用户取消订阅后为什么还能看到旧帖？** 若 Home 定义为仅订阅内容，需读时校验并失效订阅缓存；个性化推荐若允许未订阅内容，则另有推荐/屏蔽规则。
 - **投票表能算出上周获得的票数吗？** 只有当前状态不行；需要保留带时间的变更事件或时间窗聚合。
