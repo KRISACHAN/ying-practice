@@ -1,6 +1,8 @@
 # Design Nested Comment System：多层级评论系统与数据模型设计（System Design）
 
-> **版本**：1.0 · 2026-10-28
+> **版本**：1.1 · 2026-10-28
+>
+> **本次修订**：明确微秒精度游标、按评论版本处理乱序计数事件，以及独立计数投影与切换协议。
 >
 > **定位**：系统设计面试 + PostgreSQL 树形数据建模 + Node.js / Go 工程实践参考
 >
@@ -188,6 +190,7 @@ flowchart LR
 | 内容状态、作者编辑 | PostgreSQL | 事务与权限控制 | 主库重读，审计追踪 |
 | 发表请求去重 | PostgreSQL `idempotency_requests` | 唯一键，同事务 | 原响应重放 |
 | 可见评论数（MVP） | PostgreSQL `posts.comment_count` | 同事务更新 | 与事实扫描对账 |
+| 可见评论数（异步阶段） | `comments` 为事实，`post_comment_stats` 为投影 | 每评论版本 + 去重，同事务更新投影 | 从一致快照重建，见 13.2 |
 | 批量排序/热榜（P1） | PG 投影 / Redis | 最终一致、版本化 | 重建排名 |
 | 回复通知 | Outbox → MQ → Worker | 至少一次 + 幂等消费 | 重试、重放 |
 | 已缓存的列表 | Redis | 允许过期，但展示前检查安全边界 | 主库查询/旁路 |
@@ -329,7 +332,7 @@ CREATE INDEX comments_author_created_idx
 ### 6.3 可选增强：显式版本与子节点统计
 
 ~~~sql
--- 如果要做乐观并发编辑，版本列需要 migration。
+-- 乐观并发编辑可选；第 13.2 节的异步计数阶段必须安装此 migration。
 ALTER TABLE comments
   ADD COLUMN version bigint NOT NULL DEFAULT 1
   CHECK (version >= 1);
@@ -338,6 +341,8 @@ ALTER TABLE comments
 -- 不是所有后代数；它是可重建投影，不是关系事实。
 -- ALTER TABLE comments ADD COLUMN direct_reply_count bigint ...;
 ~~~
+
+启用 `version` 后，创建为 1；编辑、作者删除、审核移除/恢复等每次真实状态或内容变更，都在修改评论的同一条 UPDATE 中 `version = version + 1`；重复目标状态不递增。删除/审核 SQL 也要同步增加版本，不能只给第 9.2 节的编辑语句加版本。异步阶段按**同一评论 ID**比较版本，不使用帖子版本或事件时间推断顺序。
 
 不要为每次回复无条件更新所有祖先节点的计数：深度越大，写入放大越明显，热门根节点会成为写热点。MVP 可先不保存子节点数量；列表多取一行判断 `hasMore`，在确实需要「还有 N 条回复」时再引入直系计数或异步投影。
 
@@ -410,6 +415,13 @@ ALTER TABLE comments
 游标内部字段（**概念载荷，不要明文信任客户端**）：`v, postId, parentId, sort, lastCreatedAt, lastId, expiresAt`。由服务端 HMAC 签名（或保存短期服务端游标 ID），验证资源绑定、顺序、有效期和最大 pageSize。
 
 根评论游标不能用于 B 评论的子回复；`nextCursor` 必须对应**最后一条实际返回给客户端**的记录，而非为判断 `hasMore` 多取的第 21/51 条记录。
+
+**时间精度属于游标契约**：`lastCreatedAt` 固定使用 UTC、六位小数的字符串，例如 `2026-10-28T12:00:00.123456Z`，必须与数据库排序值无损对应。PostgreSQL `timestamptz` 保留微秒，Node `pg` 默认解析出的 JavaScript `Date` 只保留毫秒；将其转为 JSON 会把 `.123456` 截断成 `.123`，随后正序分页可能重复节点、倒序分页可能漏项，追加 UUID 不能补回丢失的精度。[node-postgres Data Types](https://node-postgres.com/features/types)
+
+- 第 10 节用于生成游标的查询返回独立的 `cursor_created_at` 文本列；服务端直接将该字符串写入已签名游标，下一页原样作为 `$n::timestamptz` 参数传回数据库。
+- Node 不得对该字段调用 `new Date()` / `toISOString()`，客户端将整个游标视为不透明字符串；另一种实现是为 `pg` 配置保留微秒的类型解析器，并统一格式。
+- Go 使用相同的 UTC 六位小数字符串契约；使用 SQL 文本列可避免两语言格式分歧。普通展示用 `createdAt` 可以独立格式化，不能据此重建游标。
+- 回归数据要覆盖同一毫秒内不同微秒、完全相同时间但不同 UUID；两种排序都验证跨语言翻页没有重复和漏项。
 
 ### 7.4 幂等创建的事务语义
 
@@ -565,6 +577,7 @@ RETURNING id, version, updated_at;
 
 ~~~sql
 -- 前置：已锁住帖子行、完成鉴权，且目标评论属于该帖。
+-- 若已安装第 6.3 节的 version 列，SET 中同时加入 version = version + 1。
 UPDATE comments
 SET status = 'DELETED', body = '[deleted]', updated_at = now()
 WHERE id = $1 AND post_id = $2
@@ -598,6 +611,8 @@ RETURNING id, status;
 -- $2/$3 = 上页最后一条的 (created_at,id)，首屏均传 NULL
 -- $4 = 实际 pageSize + 1，最大值由 API 限制
 SELECT id, post_id, parent_id, depth, status, created_at,
+       to_char(created_at AT TIME ZONE 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_created_at,
        CASE WHEN status = 'VISIBLE' THEN author_id ELSE NULL END AS author_id,
        CASE WHEN status = 'VISIBLE' THEN body ELSE NULL END AS body
 FROM comments
@@ -618,6 +633,8 @@ LIMIT $4;
 -- $3/$4 = 上页最后一条 (created_at,id)
 -- $5 = pageSize + 1
 SELECT id, post_id, parent_id, depth, status, created_at,
+       to_char(created_at AT TIME ZONE 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_created_at,
        CASE WHEN status = 'VISIBLE' THEN author_id ELSE NULL END AS author_id,
        CASE WHEN status = 'VISIBLE' THEN body ELSE NULL END AS body
 FROM comments
@@ -663,6 +680,8 @@ WITH parent_ids AS (
 )
 SELECT p.id AS requested_parent_id,
        c.id, c.parent_id, c.created_at, c.status,
+       to_char(c.created_at AT TIME ZONE 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_created_at,
        CASE WHEN c.status = 'VISIBLE' THEN c.body ELSE NULL END AS body
 FROM parent_ids p
 CROSS JOIN LATERAL (
@@ -937,11 +956,65 @@ MVP 用 `posts FOR UPDATE` 保证评论总数精确且权限竞争有确定顺�
 
 **演进方案 A：主写入不再更新帖子计数（读模型最终一致）**：
 
-1. 写入先锁帖子 `FOR SHARE`，再锁目标父节点 `FOR SHARE`；只插入 comments + Outbox，不更新 `posts.comment_count`。
-2. `FOR SHARE` 对多个回复事务可共存，但与审核修改帖子/父节点的写锁冲突；审核/权限模块必须遵循同一协议。
-3. Count Projector 消费 `comment_created / comment_visibility_changed`，通过 `processed_events(consumer_name,event_id)` 幂等后维护计数。
-4. 带 `asOf / freshness` 表达计数滞后，并定期在有边界的数据库快照中对账。
-5. **不可只把「帖子锁改成 FOR SHARE」而同时仍 UPDATE 帖子行**：共享锁升级为写锁可能导致并发死锁，也没有消除写热点。
+1. 创建事务先锁帖子 `FOR SHARE`，再锁目标父节点 `FOR SHARE`；保留原来的幂等预留与响应保存，只移除 `posts.comment_count` 更新，评论与 Outbox 仍同事务提交。
+2. 评论编辑/删除/审核/恢复也先锁帖子 `FOR SHARE`、再锁目标评论 `FOR UPDATE`，不再更新帖子计数；父评论状态仍在评论行上串行化。帖子审核本身仍需取得与 `FOR SHARE` 冲突的写锁，社区权限沿用原授权协议。移动子树若开启，仍按第 11.5 节持有帖级 `FOR UPDATE` 排斥所有创建。
+3. **计数只写独立的 `post_comment_stats`，不再回写 `posts.comment_count`**。否则 Projector 的 UPDATE 与创建持有的帖子 `FOR SHARE` 仍冲突，命令写入和计数工作会互相等待。共享锁升级为写锁也可能死锁。[PostgreSQL Row-Level Locks](https://www.postgresql.org/docs/current/explicit-locking.html#LOCKING-ROWS)
+4. Count Projector 按下述绝对状态/评论版本协议消费，去重、每评论投影和帖子计数同事务提交。API 在切换后统一从新表取评论数，并表达最终一致性。
+5. 计数带 `freshness` 与消费延迟指标；最后一次投影更新时间不代表此前所有事件均已消费。需要声称完整的 `asOf` 时，必须有对应的源水位/消费屏障。定期从一致数据库快照核对投影。
+
+**异步阶段的增量迁移 DDL**（依赖第 6.3 节的 `comments.version`；不是 MVP 必装表）：
+
+~~~sql
+CREATE TABLE post_comment_stats (
+  post_id uuid PRIMARY KEY REFERENCES posts(id),
+  visible_count bigint NOT NULL DEFAULT 0 CHECK (visible_count >= 0),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE comment_count_state (
+  comment_id uuid PRIMARY KEY,
+  post_id uuid NOT NULL,
+  comment_version bigint NOT NULL DEFAULT 0 CHECK (comment_version >= 0),
+  is_visible boolean NOT NULL DEFAULT false
+);
+~~~
+
+`comment_count_state` 是消费者私有投影，版本 0 仅表示尚未处理的占位；真实事件从 1 开始。投影不通过 FK 锁定评论事实行，`post_id` 只接受可信 Outbox 生产者给出的不可变归属，发现同一评论归属冲突应报错并回滚。空帖可以没有 stats 行，API 按 0 处理；有评论的帖子在初始化或首次消费时建立 stats 行。该表隔离了计数与帖子权限行的锁竞争，计数行自身仍可能是热点，可继续批量化或使用方案 B。
+
+**事件协议：传绝对状态，不直接累加生产者给的差量**：
+
+~~~json
+{
+  "eventId": "uuid",
+  "eventType": "comment.count_state_changed.v2",
+  "aggregateType": "comment",
+  "aggregateId": "comment-uuid",
+  "aggregateVersion": 2,
+  "payload": { "postId": "post-uuid", "status": "REMOVED" }
+}
+~~~
+
+创建产生版本 1、状态 VISIBLE；删除/移除/恢复使用本次 UPDATE 得到的新版本和新状态写 Outbox，事件 ID 与载荷提交后不可改变。编辑可增长评论版本而不发计数事件，版本存在间隙是合法的。此 v2 事件独立于 Reddit 的投票事件，不复用帖子版本；不要将旧式增量计数事件交给同一消费者解释。
+
+**单事件消费事务**：
+
+以下以 PostgreSQL `READ COMMITTED` 为基线；遇到死锁或序列化失败，应回滚后重试整个事务，不能从中间一步继续。
+
+1. `BEGIN`；用本次投影代际的 `consumer_name` 在 `processed_events` 插入 eventId，`ON CONFLICT DO NOTHING RETURNING`。无返回行表示已成功处理，可结束事务并 ack；不能再次修改投影。
+2. `INSERT comment_count_state(..., comment_version=0, is_visible=false) ON CONFLICT DO NOTHING`，随后在**下一条 SQL** 对该评论投影 `SELECT ... FOR UPDATE`，读取已提交的最新版本；校验 postId 不变。
+3. 若 `event.aggregateVersion <= stored.comment_version`，保留已存的较新或相同版本状态，只记录该旧事件已处理；否则令 `new_visible = (status == 'VISIBLE')`，计算 `delta = int(new_visible) - int(stored.is_visible)`。这里比较的是**旧投影状态**，不是事件声称的 old 状态。
+4. 确保 stats 行存在（`INSERT ... ON CONFLICT DO NOTHING`）；用 `UPDATE post_comment_stats SET visible_count = visible_count + delta, updated_at = now()` 原子应用差量，并更新该评论投影的版本与布尔值。delta 为 0 也须推进评论投影版本，可省略无意义的 stats UPDATE。
+5. 三类写入一起 `COMMIT` 后才 ack；任一步失败全事务回滚并重试。事务一次处理一个事件；若以后改为批量，所有 worker 必须采用相同的投影/计数加锁顺序。
+
+例如删除 v2 先到：初始贡献为 0，新状态也贡献 0，所以不会把计数减成负数；之后创建 v1 被版本比较忽略。恢复 v3 再到时从 0 加到 1。反过来按 v1 → v2 → v3 到达，最终结果同样为 1。**eventId 去重保护重复投递，评论版本保护乱序，二者职责不同。**
+
+**从同步计数切换与回退**：
+
+1. 先安装版本列和投影表，统一所有评论写入口的版本递增与 v2 Outbox 生产协议；暂时保持 MVP 同步计数，新消费者先不运行。
+2. 为教学实现选择短暂停写窗口：暂停所有评论命令（包括编辑和审核），排空在途事务；在一个一致快照中用每条评论的当前 `version/status` 初始化 `comment_count_state`，并按帖子汇总 VISIBLE 数量初始化 stats。不能只复制旧总数，却让每评论投影为空，否则重放会重复加数。
+3. 使用新的消费者名称（例如 `comment-count-v2-epoch1`）处理保留的 v2 事件；快照已包含的事件版本会被忽略，后续更高版本按差量更新。确保 Outbox/消息保留覆盖切换窗口，切换期间不要删除尚未消费的事件。
+4. 在停写窗口内统一切换命令事务为上述共享锁协议、API 读 stats，确认所有实例采用同一模式后恢复写入。旧 `posts.comment_count` 停止维护，不能再作为接口或排序依据。线上无停机切换需要额外水位/双写协议，不由这份教学步骤承诺。
+5. 对账重建或回退也应暂停命令、排空事务并停止投影消费者：重建时从同一快照同时重建 stats 和逐评论状态，使用新投影代际；回退时从事实表重算 `posts.comment_count`，再统一恢复帖级排他锁与同步计数。不能直接启用已经落后的旧计数。
 
 **演进方案 B：分桶计数**：把热点帖的计数分为多个 `(post_id,bucket_id)` 聚合行，写入或投影按稳定分桶更新；读取时求和或异步汇总。它降低单行热点，但使读取、对账和排序更复杂。投票计数/热门排行同理适用「事实 + 可重建投影」。
 
@@ -982,6 +1055,7 @@ sequenceDiagram
 
 - 如果 MQ 发布成功后、`published_at` 更新前进程崩溃，Publisher 会重发**同一个 eventId**。因此是至少一次，不是天生严格一次。
 - Consumer 的 `processed_events` 去重与目标数据库投影必须同事务提交；先 ack 后落库会丢事件。
+- 去重不保证事件按创建/删除顺序到达；评论计数必须按第 13.2 节比较每评论版本，不能只根据 eventId 去重后直接执行事件中的 `+1/-1`。
 - 多 Publisher 读取 Outbox 时可以用 `FOR UPDATE SKIP LOCKED`，但应采用有界批量和短事务，不宜持锁跨网络发布。更完整的实现需 claim/lease 字段及超时恢复，或专用 CDC。
 - 热榜和回复通知允许滞后；删除权限必须在读取时重新检查。
 - NATS Core 是 at-most-once，JetStream 提供持久化与至少一次投递，不要把它们混淆。[NATS JetStream](https://docs.nats.io/concepts/jetstream) · [PostgreSQL SKIP LOCKED](https://www.postgresql.org/docs/current/sql-select.html)
@@ -1095,6 +1169,7 @@ Service 内通过同一个 `pg.PoolClient` 进行 `BEGIN / COMMIT / ROLLBACK`；
 - Event Loop 适合大量 IO 请求；数据库连接池是有界资源，不应创建无限并发 Promise。
 - 递归树大量排序/组装或 HTML sanitize 可能带来 CPU 压力；限制每页节点、考虑 Worker Threads / 独立后台任务。
 - 请求中断可传播 AbortSignal，但**不能**把 HTTP 取消当成已提交数据库事务撤销。取消/超时与提交结果需按幂等键查询确认。
+- `pg` 的默认日期解析会丢失微秒；分页使用第 7.3 节的 `cursor_created_at` 原始文本，不从 JS `Date` 重建游标。
 - Redis/消息队列消费要有独立的 Worker 进程/部署单元，不能把长任务塞在请求处理函数里。
 
 ---
@@ -1274,7 +1349,7 @@ func (h *Handler) Create(c *gin.Context) {
 
 **阶段 C：热门帖写压力、异步投影**
 
-移除每次写的热点帖子计数更新 → 异步准确可重放计数投影/分桶 → Outbox + JetStream + Inbox → 更严格的状态可见性检查。仅当频繁整树查询成为瓶颈时，再压测 `ltree` 或 Closure Table。
+按第 13.2 节完成版本/事件迁移与一致快照初始化 → 评论命令不再更新帖子行 → 独立 `post_comment_stats` + 每评论版本投影/分桶 → Outbox + JetStream + Inbox → 更严格的状态可见性检查。仅当频繁整树查询成为瓶颈时，再压测 `ltree` 或 Closure Table。
 
 **分库分片并非必选答案**：将评论按 `post_id` 分布可以获得较好的帖子聚合局部性，但全局 `comment_id` 直查、用户评论历史、热门帖单分片热点、跨分片权限/计数都会复杂化。应在单库垂直/水平优化和证据充分后再设计分片键。
 
@@ -1288,6 +1363,7 @@ func (h *Handler) Create(c *gin.Context) {
 - 空正文/超长正文/非法 UUID/非法 cursor 必须拒绝。
 - 创建时拒绝跨帖父评论；拒绝向 REMOVED/DELETED 节点新增回复。
 - 两种游标的比较方向、时间同值时的 `id` 次序正确。
+- 游标固定为 UTC 六位小数，Node/Go 编解码无损；普通展示时间不得用于生成游标。
 - VISIBLE → REMOVED/DELETED/RESTORE 的计数差量只有一次。
 - DTO 映射对 REMOVED/DELETED 不暴露原正文或作者字段。
 
@@ -1303,8 +1379,11 @@ func (h *Handler) Create(c *gin.Context) {
 | 重复删除 | 20 个并发 DELETE 同一评论 | 计数最多减 1 |
 | 深度上限 | 在 depth=20 节点下回复 | 返回 422，未创建 |
 | 游标翻页 | 同时间戳、边翻页边插入/删除 | 无相同节点重复，按已定义一致性语义 |
+| 微秒游标 | `.123400/.123500/.123600` 及完全同时间不同 UUID；页大小 1，交替经过 Node/Go | 正序/倒序完整遍历，无重复或漏项；`cursor_created_at` 精确往返 |
 | 移动子树（P2） | 移动 + 新增子节点 | 不产生环、不漏更新深度 |
-| 异步事件（P1） | 同 eventId 重发 / 乱序 | 不重复加减计数、可对账 |
+| 异步事件（P1） | 创建 v1、移除 v2、恢复 v3 任意顺序/重复/并发；删除先于创建 | 计数不为负；逐评论投影保持最高版本；最终计数与事实一致 |
+| 独立计数锁 | 创建持有帖子 `FOR SHARE` 时，消费者更新已有 stats 行 | stats 更新不等待该帖子共享锁；消费者不 UPDATE posts |
+| 投影初始化/回退 | 存量评论含各状态，切换前事件仍待消费 | 快照同时初始化总数与逐评论状态，重放不双计；回退从事实重算 |
 
 **必须在真实 PostgreSQL 上验证**。SQLite 内存测试不能替代复合 FK、PG 锁冲突、`SKIP LOCKED`、`ltree`、事务隔离级别行为。
 
@@ -1313,6 +1392,7 @@ func (h *Handler) Create(c *gin.Context) {
 - COMMIT 成功后故意断开 HTTP，使用同一幂等键重试。
 - 数据库事务中间报错，确认无孤立评论、无遗留幂等行、无多余计数。
 - Outbox 发布后但标记成功前强制退出，消费者对重复事件去重。
+- 在消费者写去重记录、逐评论投影、帖子统计之间注入失败；确认三者一起回滚，重投后只计一次。
 - Redis 全部清空，服务仍能从数据库读取正确评论树。
 - 强制只读副本滞后，验证「刚发的新评论」的读己之写策略。
 - 删除/审核事件延迟，验证缓存不暴露旧正文。
