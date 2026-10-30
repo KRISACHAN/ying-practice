@@ -10,7 +10,7 @@ importers:
     dependencies:
       '@hono/zod-validator':
         specifier: ^0.7.6
-        version: 0.7.6(hono@4.12.15)(zod@4.3.6)
+        version: 0.7.6(hono@4.13.11)(zod@4.3.6)
       crypto:
         specifier: ^1.0.1
         version: 1.0.1
@@ -18,8 +18,8 @@ importers:
         specifier: ^0.45.2
         version: 0.45.2
       hono:
-        specifier: ^4.12.15
-        version: 4.12.15
+        specifier: ^4.13.11
+        version: 4.13.11
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -869,8 +869,8 @@ packages:
   get-tsconfig@4.14.0:
     resolution: {integrity: sha512-yTb+8DXzDREzgvYmh6s9vHsSVCHeC0G3PI5bEXNBHtmshPnO+S5O7qgLEOn0I5QvMy6kpZN8K1NKGyilLb93wA==}
 
-  hono@4.12.15:
-    resolution: {integrity: sha512-qM0jDhFEaCBb4TxoW7f53Qrpv9RBiayUHo0S52JudprkhvpjIrGoU1mnnr29Fvd1U335ZFPZQY1wlkqgfGXyLg==}
+  hono@4.13.11:
+    resolution: {integrity: sha512-/SMX/RQNJn7oNmFwH6DtwDqcrzZU2otm1FD6OJe2cWF6cfy/F8hq0XVBv7xW3FTJshRQwuBnXHDq2kNsdZnshg==}
     engines: {node: '>=16.9.0'}
 
   kleur@4.1.5:
@@ -1233,9 +1233,9 @@ snapshots:
   '@esbuild/win32-x64@0.27.3':
     optional: true
 
-  '@hono/zod-validator@0.7.6(hono@4.12.15)(zod@4.3.6)':
+  '@hono/zod-validator@0.7.6(hono@4.13.11)(zod@4.3.6)':
     dependencies:
-      hono: 4.12.15
+      hono: 4.13.11
       zod: 4.3.6
 
   '@img/colour@1.1.0': {}
@@ -1474,7 +1474,7 @@ snapshots:
     dependencies:
       resolve-pkg-maps: 1.0.0
 
-  hono@4.12.15: {}
+  hono@4.13.11: {}
 
   kleur@4.1.5: {}
 
