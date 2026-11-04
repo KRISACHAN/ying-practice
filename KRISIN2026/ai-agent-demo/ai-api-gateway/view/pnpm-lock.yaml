@@ -14,13 +14,13 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.2.3
-        version: 1.34.0(vite@6.4.2)(workerd@1.20260426.1)(wrangler@4.86.0)
+        version: 1.34.0(vite@6.4.5)(workerd@1.20260426.1)(wrangler@4.86.0)
       vite:
-        specifier: ^6.3.5
-        version: 6.4.2
+        specifier: ^6.4.5
+        version: 6.4.5
       vite-ssr-components:
         specifier: ^0.6.1
-        version: 0.6.1
+        version: 0.6.1(supports-color@10.2.2)
       wrangler:
         specifier: ^4.17.0
         version: 4.86.0
@@ -891,8 +891,8 @@ packages:
     resolution: {integrity: sha512-KVHI6pYcF3NZ1f6OVUCx+H+ICBk8DqDHhDUjXoWqm/03sy08tGD2X785oAxqpRR6FKQu2Rvxo5UtfbD7l5UFzw==}
     engines: {node: '>=18.0.0'}
 
-  vite@6.4.2:
-    resolution: {integrity: sha512-2N/55r4JDJ4gdrCvGgINMy+HH3iRpNIz8K6SFwVsA+JbQScLiC+clmAxBgwiSPgcG9U15QmvqCGWzMbqda5zGQ==}
+  vite@6.4.5:
+    resolution: {integrity: sha512-4enwjFfi4IwtEh0w+jPzpLVOFQiPHmmzPxcHXQOyEur47o6u0jE573DmGpjA+7irXoMLYRZD5ZaFUEneS3abPg==}
     engines: {node: ^18.0.0 || ^20.0.0 || >=22.0.0}
     hasBin: true
     peerDependencies:
@@ -996,7 +996,7 @@ snapshots:
       '@babel/parser': 7.29.2
       '@babel/types': 7.29.0
 
-  '@babel/traverse@7.29.0':
+  '@babel/traverse@7.29.0(supports-color@10.2.2)':
     dependencies:
       '@babel/code-frame': 7.29.0
       '@babel/generator': 7.29.1
@@ -1004,7 +1004,7 @@ snapshots:
       '@babel/parser': 7.29.2
       '@babel/template': 7.28.6
       '@babel/types': 7.29.0
-      debug: 4.4.3
+      debug: 4.4.3(supports-color@10.2.2)
     transitivePeerDependencies:
       - supports-color
 
@@ -1021,12 +1021,12 @@ snapshots:
     optionalDependencies:
       workerd: 1.20260426.1
 
-  '@cloudflare/vite-plugin@1.34.0(vite@6.4.2)(workerd@1.20260426.1)(wrangler@4.86.0)':
+  '@cloudflare/vite-plugin@1.34.0(vite@6.4.5)(workerd@1.20260426.1)(wrangler@4.86.0)':
     dependencies:
       '@cloudflare/unenv-preset': 2.16.1(unenv@2.0.0-rc.24)(workerd@1.20260426.1)
       miniflare: 4.20260426.0
       unenv: 2.0.0-rc.24
-      vite: 6.4.2
+      vite: 6.4.5
       wrangler: 4.86.0
       ws: 8.18.0
     transitivePeerDependencies:
@@ -1426,9 +1426,11 @@ snapshots:
 
   cookie@1.1.1: {}
 
-  debug@4.4.3:
+  debug@4.4.3(supports-color@10.2.2):
     dependencies:
       ms: 2.1.3
+    optionalDependencies:
+      supports-color: 10.2.2
 
   detect-libc@2.1.2: {}
 
@@ -1619,15 +1621,15 @@ snapshots:
     dependencies:
       pathe: 2.0.3
 
-  vite-ssr-components@0.6.1:
+  vite-ssr-components@0.6.1(supports-color@10.2.2):
     dependencies:
       '@babel/parser': 7.29.2
-      '@babel/traverse': 7.29.0
+      '@babel/traverse': 7.29.0(supports-color@10.2.2)
       picomatch: 4.0.4
     transitivePeerDependencies:
       - supports-color
 
-  vite@6.4.2:
+  vite@6.4.5:
     dependencies:
       esbuild: 0.25.12
       fdir: 6.5.0(picomatch@4.0.4)
