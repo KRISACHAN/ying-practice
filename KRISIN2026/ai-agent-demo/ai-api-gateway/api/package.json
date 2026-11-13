@@ -10,7 +10,7 @@
     },
     "dependencies": {
         "@langchain/openai": "^1.4.5",
-        "hono": "^4.12.15"
+        "hono": "^4.13.16"
     },
     "devDependencies": {
         "wrangler": "^4.4.0"
